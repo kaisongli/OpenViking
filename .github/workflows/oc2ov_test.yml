@@ -54,15 +54,6 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Cache Python dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-p0-${{ hashFiles('tests/oc2ov_test/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-p0-
-            ${{ runner.os }}-pip-
-
       - name: Install test dependencies
         run: |
           echo "📦 Installing test dependencies..."
