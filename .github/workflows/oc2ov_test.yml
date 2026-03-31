@@ -1,0 +1,128 @@
+name: 05. OpenClaw2OpenViking Memory Tests
+
+on:
+  release:
+    types: [prereleased, released]
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip tests (for emergency releases)'
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Release tag to associate with this test run'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  p0-tests:
+    name: P0 Memory Tests
+    runs-on: [self-hosted, linux, x64]
+    if: inputs.skip_tests != true
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-p0-${{ hashFiles('tests/oc2ov_test/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-p0-
+            ${{ runner.os }}-pip-
+
+      - name: Install test dependencies
+        run: |
+          cd tests/oc2ov_test
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-html
+
+      - name: Check OpenClaw installation
+        run: |
+          if ! command -v openclaw &> /dev/null; then
+            echo "::error::OpenClaw is not installed on this runner"
+            echo "Please install OpenClaw on the self-hosted runner before running tests"
+            exit 1
+          fi
+          echo "OpenClaw version: $(openclaw --version)"
+
+      - name: Check OpenClaw Gateway status
+        run: |
+          if ! openclaw gateway status &> /dev/null; then
+            echo "::warning::OpenClaw Gateway is not running, attempting to start..."
+            openclaw gateway &
+            sleep 5
+          fi
+          
+          if openclaw gateway status; then
+            echo "OpenClaw Gateway is running"
+          else
+            echo "::error::Failed to start OpenClaw Gateway"
+            exit 1
+          fi
+
+      - name: Run P0 tests
+        id: run-tests
+        run: |
+          cd tests/oc2ov_test
+          mkdir -p reports
+          pytest tests/p0 -v \
+            --html=reports/test_report_p0.html \
+            --self-contained-html \
+            --tb=short \
+            --timeout=3600
+        continue-on-error: true
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: p0-test-reports-${{ github.run_id }}
+          path: |
+            tests/oc2ov_test/reports/test_report_p0.html
+            tests/oc2ov_test/logs/
+          retention-days: 30
+
+      - name: Check test results
+        if: steps.run-tests.outcome != 'success'
+        run: |
+          echo "::error::P0 tests failed! Please check the test report for details."
+          exit 1
+
+      - name: Test summary
+        if: success()
+        run: |
+          echo "::notice::P0 tests passed successfully! Ready for release."
+
+  release-approval:
+    name: Release Approval Gate
+    needs: [p0-tests]
+    if: github.event_name == 'release' && github.event.action == 'prereleased'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Approve release
+        run: |
+          echo "::notice::P0 tests passed. Release can proceed."
+          echo "Release ${{ github.event.release.tag_name }} has been validated by P0 tests."
