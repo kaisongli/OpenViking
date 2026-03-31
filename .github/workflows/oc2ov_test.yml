@@ -72,32 +72,6 @@ jobs:
           pip install pytest pytest-html
           echo "✅ Dependencies installed"
 
-      - name: Check OpenClaw installation
-        run: |
-          echo "🔍 Checking OpenClaw installation..."
-          if ! command -v openclaw &> /dev/null; then
-            echo "::error::OpenClaw is not installed on this runner"
-            echo "Please install OpenClaw on the self-hosted runner before running tests"
-            exit 1
-          fi
-          echo "✅ OpenClaw version: $(openclaw --version)"
-
-      - name: Check OpenClaw Gateway status
-        run: |
-          echo "🔍 Checking OpenClaw Gateway status..."
-          if ! openclaw gateway status &> /dev/null; then
-            echo "::warning::OpenClaw Gateway is not running, attempting to start..."
-            openclaw gateway &
-            sleep 5
-          fi
-          
-          if openclaw gateway status; then
-            echo "✅ OpenClaw Gateway is running"
-          else
-            echo "::error::Failed to start OpenClaw Gateway"
-            exit 1
-          fi
-
       - name: Run P0 tests
         id: run-tests
         run: |
