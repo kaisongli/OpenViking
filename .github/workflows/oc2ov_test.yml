@@ -29,7 +29,7 @@ concurrency:
 jobs:
   p0-tests:
     name: P0 Memory Tests
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux, x64]
     if: inputs.skip_tests != true
     
     steps:
