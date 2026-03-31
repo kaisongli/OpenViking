@@ -44,6 +44,15 @@ jobs:
           echo "  - GITHUB_REF: ${{ github.ref }}"
           echo "  - GITHUB_SHA: ${{ github.sha }}"
 
+      - name: Configure Git mirror for China network
+        run: |
+          echo "🔧 Configuring Git to use China mirror..."
+          git config --global url."https://gitclone.com/github.com/".insteadOf "https://github.com/"
+          git config --global http.postBuffer 524288000
+          git config --global http.lowSpeedLimit 0
+          git config --global http.lowSpeedTime 999999
+          echo "✅ Git mirror configured"
+
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
