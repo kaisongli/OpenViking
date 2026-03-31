@@ -47,7 +47,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          submodules: recursive
+          fetch-depth: 1
+          submodules: false
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v6
