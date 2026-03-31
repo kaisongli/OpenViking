@@ -33,6 +33,17 @@ jobs:
     if: inputs.skip_tests != true
     
     steps:
+      - name: Debug - Start
+        run: |
+          echo "🚀 Job started at $(date)"
+          echo "Runner: $(hostname)"
+          echo "Working directory: $(pwd)"
+          echo "Python version: $(python3 --version 2>&1 || echo 'Python not found')"
+          echo "Environment variables:"
+          echo "  - RUNNER_OS: ${{ runner.os }}"
+          echo "  - GITHUB_REF: ${{ github.ref }}"
+          echo "  - GITHUB_SHA: ${{ github.sha }}"
+
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
@@ -54,22 +65,26 @@ jobs:
 
       - name: Install test dependencies
         run: |
+          echo "📦 Installing test dependencies..."
           cd tests/oc2ov_test
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest pytest-html
+          echo "✅ Dependencies installed"
 
       - name: Check OpenClaw installation
         run: |
+          echo "🔍 Checking OpenClaw installation..."
           if ! command -v openclaw &> /dev/null; then
             echo "::error::OpenClaw is not installed on this runner"
             echo "Please install OpenClaw on the self-hosted runner before running tests"
             exit 1
           fi
-          echo "OpenClaw version: $(openclaw --version)"
+          echo "✅ OpenClaw version: $(openclaw --version)"
 
       - name: Check OpenClaw Gateway status
         run: |
+          echo "🔍 Checking OpenClaw Gateway status..."
           if ! openclaw gateway status &> /dev/null; then
             echo "::warning::OpenClaw Gateway is not running, attempting to start..."
             openclaw gateway &
@@ -77,7 +92,7 @@ jobs:
           fi
           
           if openclaw gateway status; then
-            echo "OpenClaw Gateway is running"
+            echo "✅ OpenClaw Gateway is running"
           else
             echo "::error::Failed to start OpenClaw Gateway"
             exit 1
@@ -86,6 +101,7 @@ jobs:
       - name: Run P0 tests
         id: run-tests
         run: |
+          echo "🧪 Starting P0 tests..."
           cd tests/oc2ov_test
           mkdir -p reports
           pytest tests/p0 -v \
@@ -93,6 +109,7 @@ jobs:
             --self-contained-html \
             --tb=short \
             --timeout=3600
+          echo "✅ P0 tests completed"
         continue-on-error: true
 
       - name: Upload test reports
