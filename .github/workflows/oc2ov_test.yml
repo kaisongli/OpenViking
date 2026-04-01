@@ -44,15 +44,25 @@ jobs:
           echo "  - GITHUB_REF: ${{ github.ref }}"
           echo "  - GITHUB_SHA: ${{ github.sha }}"
 
-      - name: Configure Git mirror for China network
+      - name: Configure Git proxy settings
         run: |
-          echo "🔧 Configuring Git to use China mirror..."
-          # Use FastGit mirror which supports shallow clone
-          git config --global url."https://hub.fastgit.xyz/".insteadOf "https://github.com/"
+          echo "🔧 Configuring Git proxy settings..."
+          # Check if proxy is configured in runner environment
+          if [ -n "$HTTP_PROXY" ] || [ -n "$HTTPS_PROXY" ]; then
+            echo "✅ Using proxy from environment:"
+            echo "   HTTP_PROXY: $HTTP_PROXY"
+            echo "   HTTPS_PROXY: $HTTPS_PROXY"
+          else
+            echo "ℹ️  No proxy configured in environment"
+            echo "   Configure proxy in runner's .env file for better stability"
+          fi
+          
+          # Configure git settings for better network stability
           git config --global http.postBuffer 524288000
           git config --global http.lowSpeedLimit 0
           git config --global http.lowSpeedTime 999999
-          echo "✅ Git mirror configured"
+          git config --global core.compression 0
+          echo "✅ Git settings configured"
 
       - name: Checkout repository
         uses: actions/checkout@v6
