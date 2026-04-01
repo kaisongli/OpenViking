@@ -79,18 +79,29 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          echo "📦 Installing test dependencies..."
+          echo "📦 Setting up Python virtual environment..."
           cd tests/oc2ov_test
-          # Skip pip upgrade to avoid conflict with system-installed pip
-          pip3 install -r requirements.txt --break-system-packages
-          pip3 install pytest pytest-html pytest-timeout --break-system-packages
-          echo "✅ Dependencies installed"
+          
+          # Create virtual environment
+          python3 -m venv venv
+          echo "✅ Virtual environment created"
+          
+          # Activate and install dependencies
+          source venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-html pytest-timeout
+          echo "✅ Dependencies installed in virtual environment"
 
       - name: Run P0 tests
         id: run-tests
         run: |
           echo "🧪 Starting P0 tests..."
           cd tests/oc2ov_test
+          
+          # Activate virtual environment
+          source venv/bin/activate
+          
           mkdir -p reports
           pytest tests/p0 -v \
             --html=reports/test_report_p0.html \
