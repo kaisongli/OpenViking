@@ -71,6 +71,23 @@ export GOPROXY=https://goproxy.cn,direct
 export GOSUMDB=off
 log "✅ Go proxy configured: $GOPROXY"
 
+log "[5.5/8] Initializing Rust toolchain..."
+if command -v rustup &> /dev/null; then
+    RUST_DEFAULT=$(rustup default 2>/dev/null || echo "")
+    if [ -z "$RUST_DEFAULT" ] || [ "$RUST_DEFAULT" = "none" ]; then
+        log "No default Rust toolchain found, setting up stable..."
+        rustup default stable 2>&1 | tee -a "$LOG_FILE"
+        log "✅ Rust stable toolchain installed and set as default"
+    else
+        log "✅ Rust toolchain already configured: $RUST_DEFAULT"
+    fi
+    
+    RUST_VERSION=$(rustc --version 2>/dev/null | awk '{print $2}' || echo "unknown")
+    log "Rust version: $RUST_VERSION"
+else
+    log "⚠️  rustup not found, Rust may not be installed"
+fi
+
 log "[6/8] Cleaning previous build artifacts..."
 make clean 2>/dev/null || true
 log "Clean completed"
