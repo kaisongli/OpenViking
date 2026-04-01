@@ -128,18 +128,16 @@ fi
 log "[5.6/8] Installing Python build dependencies..."
 log "Installing setuptools-scm and other build tools..."
 
-# Check if we need --break-system-packages flag
-PIP_FLAGS=""
-if python3 -c "import sys; sys.exit(0 if hasattr(sys, 'externally_managed') else 1)" 2>/dev/null; then
-    log "Detected externally-managed Python environment, using --break-system-packages"
-    PIP_FLAGS="--break-system-packages"
-fi
-
-pip3 install $PIP_FLAGS --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE"
-if [ $? -eq 0 ]; then
-    log "✅ Build dependencies installed successfully"
+# Try to install without --break-system-packages first
+if ! pip3 install --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE"; then
+    log "Standard pip install failed, trying with --break-system-packages..."
+    if pip3 install --break-system-packages --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE"; then
+        log "✅ Build dependencies installed successfully with --break-system-packages"
+    else
+        log "⚠️  Failed to install some build dependencies, continuing anyway..."
+    fi
 else
-    log "⚠️  Failed to install some build dependencies, continuing anyway..."
+    log "✅ Build dependencies installed successfully"
 fi
 
 log "[6/8] Cleaning previous build artifacts..."
