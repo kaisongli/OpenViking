@@ -77,6 +77,38 @@ jobs:
           ref: ${{ github.ref }}
           submodules: false
 
+      - name: Upgrade OpenViking to latest main
+        run: |
+          echo "🔄 Upgrading OpenViking to latest main branch..."
+          
+          # Make upgrade script executable
+          chmod +x scripts/upgrade_openviking.sh
+          
+          # Run upgrade script
+          bash scripts/upgrade_openviking.sh
+          
+          echo "✅ OpenViking upgrade completed"
+          
+          # Wait for services to be fully ready
+          echo "⏳ Waiting for services to be ready..."
+          sleep 10
+          
+          # Health check
+          echo "🏥 Performing health check..."
+          if command -v openclaw &> /dev/null; then
+            for i in {1..5}; do
+              if openclaw gateway status | grep -q "running"; then
+                echo "✅ OpenClaw gateway is running"
+                break
+              else
+                echo "⏳ Attempt $i/5: Gateway not ready, waiting..."
+                sleep 5
+              fi
+            done
+          else
+            echo "⚠️  openclaw command not found, skipping health check"
+          fi
+
       - name: Install test dependencies
         run: |
           echo "📦 Setting up Python virtual environment..."
