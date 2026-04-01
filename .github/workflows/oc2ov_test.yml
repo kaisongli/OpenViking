@@ -33,6 +33,33 @@ jobs:
     if: inputs.skip_tests != true
     
     steps:
+      - name: Clean up previous artifacts
+        run: |
+          echo "🧹 Cleaning up previous artifacts..."
+          
+          # Clean up old test reports
+          echo "  - Removing old test reports..."
+          rm -rf tests/oc2ov_test/reports/*.html || true
+          
+          # Clean up old logs
+          echo "  - Removing old logs..."
+          rm -rf tests/oc2ov_test/logs/*.log || true
+          
+          # Clean up pip cache (optional, saves disk space)
+          echo "  - Cleaning pip cache..."
+          pip3 cache purge 2>/dev/null || echo "    (pip cache not available or already clean)"
+          
+          # Clean up old pytest cache
+          echo "  - Removing pytest cache..."
+          rm -rf .pytest_cache || true
+          rm -rf tests/oc2ov_test/.pytest_cache || true
+          
+          # Clean up __pycache__ directories
+          echo "  - Removing __pycache__ directories..."
+          find tests/oc2ov_test -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+          
+          echo "✅ Cleanup completed"
+
       - name: Debug - Start
         run: |
           echo "🚀 Job started at $(date)"
