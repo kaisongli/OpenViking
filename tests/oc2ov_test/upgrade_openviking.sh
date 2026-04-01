@@ -71,23 +71,58 @@ export GOPROXY=https://goproxy.cn,direct
 export GOSUMDB=off
 log "✅ Go proxy configured: $GOPROXY"
 
-log "[5.5/8] Initializing Rust toolchain..."
-if command -v rustup &> /dev/null; then
-    RUST_DEFAULT=$(rustup default 2>/dev/null || echo "")
-    if [ -z "$RUST_DEFAULT" ] || [ "$RUST_DEFAULT" = "none" ]; then
-        log "No default Rust toolchain found, installing stable..."
-        rustup install stable 2>&1 | tee -a "$LOG_FILE"
-        rustup default stable 2>&1 | tee -a "$LOG_FILE"
-        log "✅ Rust stable toolchain installed and set as default"
-    else
-        log "✅ Rust toolchain already configured: $RUST_DEFAULT"
-        rustup toolchain install stable 2>&1 | tee -a "$LOG_FILE" || true
+log "[5.5/8] Checking Rust toolchain..."
+RUST_OK=false
+
+# First, check if Rust is already working
+if command -v rustc &> /dev/null; then
+    RUST_VERSION=$(rustc --version 2>/dev/null | awk '{print $2}' || echo "")
+    if [ -n "$RUST_VERSION" ]; then
+        log "✅ Rust is already installed and working: $RUST_VERSION"
+        RUST_OK=true
     fi
+fi
+
+# If Rust is not working, try to fix it
+if [ "$RUST_OK" = false ]; then
+    log "Rust is not working properly, attempting to fix..."
     
+    if command -v rustup &> /dev/null; then
+        log "Found rustup, trying to install stable toolchain..."
+        
+        # Try to install stable toolchain
+        if rustup install stable 2>&1 | tee -a "$LOG_FILE"; then
+            log "✅ Stable toolchain installed"
+            
+            # Set as default
+            if rustup default stable 2>&1 | tee -a "$LOG_FILE"; then
+                log "✅ Stable set as default"
+                RUST_OK=true
+            fi
+        else
+            log "⚠️  Failed to install Rust toolchain via rustup"
+            log "Please install Rust manually on the ECS node:"
+            log "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+            log "  source \$HOME/.cargo/env"
+            log "  rustup install stable"
+            log "  rustup default stable"
+        fi
+    else
+        log "⚠️  rustup not found"
+        log "Please install Rust manually on the ECS node:"
+        log "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        log "  source \$HOME/.cargo/env"
+        log "  rustup install stable"
+        log "  rustup default stable"
+    fi
+fi
+
+# Final verification
+if [ "$RUST_OK" = true ]; then
     RUST_VERSION=$(rustc --version 2>/dev/null | awk '{print $2}' || echo "unknown")
     log "Rust version: $RUST_VERSION"
 else
-    log "⚠️  rustup not found, Rust may not be installed"
+    log "⚠️  Rust toolchain setup failed, build may fail"
 fi
 
 log "[5.6/8] Installing Python build dependencies..."
