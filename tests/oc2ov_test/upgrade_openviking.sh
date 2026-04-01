@@ -8,6 +8,7 @@ BACKUP_DIR="/root/project/OpenViking_backup"
 LOG_FILE="/var/log/openviking_upgrade.log"
 MAX_RETRIES=3
 RETRY_DELAY=10
+VENV_DIR="/root/.openviking/venv"
 
 log() {
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
@@ -18,7 +19,32 @@ log "========================================="
 log "OpenViking Upgrade Script Started"
 log "========================================="
 
-log "[1/8] Checking prerequisites..."
+log "[1/8] Checking prerequisites and activating virtual environment..."
+
+# Check if OpenViking virtual environment exists
+if [ -d "$VENV_DIR" ]; then
+    log "Found OpenViking virtual environment at: $VENV_DIR"
+    
+    # Activate virtual environment
+    if [ -f "$VENV_DIR/bin/activate" ]; then
+        source "$VENV_DIR/bin/activate"
+        log "✅ Virtual environment activated"
+        
+        # Verify Python is from venv
+        PYTHON_PATH=$(which python3 || which python)
+        log "Using Python: $PYTHON_PATH"
+        
+        if [[ "$PYTHON_PATH" != *"$VENV_DIR"* ]]; then
+            log "⚠️  Warning: Python is not from the virtual environment"
+        fi
+    else
+        log "⚠️  Virtual environment found but activate script missing"
+    fi
+else
+    log "⚠️  OpenViking virtual environment not found at $VENV_DIR"
+    log "Using system Python"
+fi
+
 if [ ! -d "$PROJECT_DIR" ]; then
     log "ERROR: OpenViking directory not found: $PROJECT_DIR"
     exit 1
@@ -54,13 +80,15 @@ CURRENT_COMMIT=$(git rev-parse HEAD)
 log "Current commit: $CURRENT_COMMIT"
 
 log "[4/8] Checking OpenViking installation mode..."
-INSTALL_MODE=$(python3 -c "import openviking; import os; path = openviking.__file__; print('dev' if 'site-packages' not in path else 'site-packages')" 2>/dev/null || echo "not_installed")
+
+# Use python (from venv if activated) instead of python3
+INSTALL_MODE=$(python -c "import openviking; import os; path = openviking.__file__; print('dev' if 'site-packages' not in path else 'site-packages')" 2>/dev/null || echo "not_installed")
 log "Current installation mode: $INSTALL_MODE"
 
 if [ "$INSTALL_MODE" = "site-packages" ]; then
     log "⚠️  OpenViking is installed in site-packages mode"
     log "Uninstalling to switch to development mode..."
-    pip3 uninstall -y openviking 2>&1 | tee -a "$LOG_FILE" || true
+    pip uninstall -y openviking 2>&1 | tee -a "$LOG_FILE" || true
     log "✅ Uninstalled site-packages version"
 fi
 
@@ -121,14 +149,14 @@ fi
 log "[5.6/8] Checking Python build dependencies..."
 
 # Check if setuptools-scm is already installed
-if python3 -c "import setuptools_scm" 2>/dev/null; then
+if python -c "import setuptools_scm" 2>/dev/null; then
     log "✅ setuptools-scm is already installed"
 else
     log "Installing setuptools-scm and other build tools..."
     
-    if ! pip3 install --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE"; then
+    if ! pip install --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE"; then
         log "Standard pip install failed, trying with --break-system-packages..."
-        if pip3 install --break-system-packages --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE"; then
+        if pip install --break-system-packages --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE"; then
             log "✅ Build dependencies installed successfully with --break-system-packages"
         else
             log "⚠️  Failed to install some build dependencies, continuing anyway..."
@@ -151,7 +179,7 @@ for i in $(seq 1 $MAX_RETRIES); do
         BUILD_SUCCESS=true
         log "Build completed successfully on attempt $i"
         
-        INSTALL_PATH=$(python3 -c "import openviking; print(openviking.__file__)" 2>/dev/null || echo "unknown")
+        INSTALL_PATH=$(python -c "import openviking; print(openviking.__file__)" 2>/dev/null || echo "unknown")
         log "OpenViking installed at: $INSTALL_PATH"
         
         if [[ "$INSTALL_PATH" == *"$PROJECT_DIR"* ]]; then
@@ -251,7 +279,7 @@ log "========================================="
 log "OpenViking Upgrade Completed"
 log "========================================="
 log "Commit: $CURRENT_COMMIT"
-OPENVIKING_VERSION=$(python3 -c "import openviking; print(openviking.__version__)" 2>/dev/null || echo "unknown")
+OPENVIKING_VERSION=$(python -c "import openviking; print(openviking.__version__)" 2>/dev/null || echo "unknown")
 log "OpenViking version: $OPENVIKING_VERSION"
 OPENCLAW_VERSION=$(openclaw --version 2>/dev/null || echo "unknown")
 log "OpenClaw version: $OPENCLAW_VERSION"
