@@ -81,7 +81,7 @@ jobs:
         run: |
           echo "📦 Installing test dependencies..."
           cd tests/oc2ov_test
-          python3 -m pip install --upgrade pip --break-system-packages
+          # Skip pip upgrade to avoid conflict with system-installed pip
           pip3 install -r requirements.txt --break-system-packages
           pip3 install pytest pytest-html pytest-timeout --break-system-packages
           echo "✅ Dependencies installed"
