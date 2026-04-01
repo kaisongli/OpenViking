@@ -47,6 +47,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.ref }}
           submodules: false
 
       - name: Set up Python 3.10
