@@ -75,11 +75,13 @@ log "[5.5/8] Initializing Rust toolchain..."
 if command -v rustup &> /dev/null; then
     RUST_DEFAULT=$(rustup default 2>/dev/null || echo "")
     if [ -z "$RUST_DEFAULT" ] || [ "$RUST_DEFAULT" = "none" ]; then
-        log "No default Rust toolchain found, setting up stable..."
+        log "No default Rust toolchain found, installing stable..."
+        rustup install stable 2>&1 | tee -a "$LOG_FILE"
         rustup default stable 2>&1 | tee -a "$LOG_FILE"
         log "✅ Rust stable toolchain installed and set as default"
     else
         log "✅ Rust toolchain already configured: $RUST_DEFAULT"
+        rustup toolchain install stable 2>&1 | tee -a "$LOG_FILE" || true
     fi
     
     RUST_VERSION=$(rustc --version 2>/dev/null | awk '{print $2}' || echo "unknown")
@@ -89,8 +91,13 @@ else
 fi
 
 log "[5.6/8] Installing Python build dependencies..."
-pip3 install --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE" || true
-log "✅ Build dependencies installed"
+log "Installing setuptools-scm and other build tools..."
+pip3 install --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE"
+if [ $? -eq 0 ]; then
+    log "✅ Build dependencies installed successfully"
+else
+    log "⚠️  Failed to install some build dependencies, continuing anyway..."
+fi
 
 log "[6/8] Cleaning previous build artifacts..."
 make clean 2>/dev/null || true
