@@ -108,8 +108,7 @@ jobs:
 
       - name: Install system dependencies (Windows)
         if: runner.os == 'Windows'
-        run: |
-          choco install cmake -y
+        uses: lukka/get-cmake@latest
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
