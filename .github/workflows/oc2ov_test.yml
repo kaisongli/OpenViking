@@ -56,7 +56,7 @@ jobs:
           cd tests/oc2ov_test
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-html
+          pip install pytest pytest-html pytest-timeout
           echo "✅ Dependencies installed"
 
       - name: Run P0 tests
