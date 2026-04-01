@@ -88,6 +88,10 @@ else
     log "⚠️  rustup not found, Rust may not be installed"
 fi
 
+log "[5.6/8] Installing Python build dependencies..."
+pip3 install --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE" || true
+log "✅ Build dependencies installed"
+
 log "[6/8] Cleaning previous build artifacts..."
 make clean 2>/dev/null || true
 log "Clean completed"
