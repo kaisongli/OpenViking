@@ -102,6 +102,10 @@ jobs:
           # Activate virtual environment
           source venv/bin/activate
           
+          # Set PYTHONPATH to fix import issues
+          export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+          echo "PYTHONPATH: $PYTHONPATH"
+          
           mkdir -p reports
           pytest tests/p0 -v \
             --html=reports/test_report_p0.html \
