@@ -47,7 +47,8 @@ jobs:
       - name: Configure Git mirror for China network
         run: |
           echo "🔧 Configuring Git to use China mirror..."
-          git config --global url."https://gitclone.com/github.com/".insteadOf "https://github.com/"
+          # Use FastGit mirror which supports shallow clone
+          git config --global url."https://hub.fastgit.xyz/".insteadOf "https://github.com/"
           git config --global http.postBuffer 524288000
           git config --global http.lowSpeedLimit 0
           git config --global http.lowSpeedTime 999999
@@ -56,7 +57,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          fetch-depth: 1
           submodules: false
 
       - name: Set up Python 3.10
