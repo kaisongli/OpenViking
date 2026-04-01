@@ -118,18 +118,24 @@ else
     log "⚠️  Rust toolchain setup failed, build may fail"
 fi
 
-log "[5.6/8] Installing Python build dependencies..."
-log "Installing setuptools-scm and other build tools..."
+log "[5.6/8] Checking Python build dependencies..."
 
-if ! pip3 install --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE"; then
-    log "Standard pip install failed, trying with --break-system-packages..."
-    if pip3 install --break-system-packages --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE"; then
-        log "✅ Build dependencies installed successfully with --break-system-packages"
-    else
-        log "⚠️  Failed to install some build dependencies, continuing anyway..."
-    fi
+# Check if setuptools-scm is already installed
+if python3 -c "import setuptools_scm" 2>/dev/null; then
+    log "✅ setuptools-scm is already installed"
 else
-    log "✅ Build dependencies installed successfully"
+    log "Installing setuptools-scm and other build tools..."
+    
+    if ! pip3 install --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE"; then
+        log "Standard pip install failed, trying with --break-system-packages..."
+        if pip3 install --break-system-packages --upgrade setuptools setuptools-scm wheel cmake build 2>&1 | tee -a "$LOG_FILE"; then
+            log "✅ Build dependencies installed successfully with --break-system-packages"
+        else
+            log "⚠️  Failed to install some build dependencies, continuing anyway..."
+        fi
+    else
+        log "✅ Build dependencies installed successfully"
+    fi
 fi
 
 log "[6/8] Cleaning previous build artifacts..."
