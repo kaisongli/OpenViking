@@ -102,9 +102,11 @@ jobs:
           # Activate virtual environment
           source venv/bin/activate
           
-          # Set PYTHONPATH to project root to fix import issues
-          # This allows imports like 'from tests.base_cli_test import ...'
-          export PYTHONPATH="$(cd ../.. && pwd)"
+          # Set PYTHONPATH to include both project root and tests/oc2ov_test
+          # This allows imports like:
+          # - 'from tests.base_cli_test import ...' (from project root)
+          # - 'from config.settings import ...' (from tests/oc2ov_test)
+          export PYTHONPATH="$(cd ../.. && pwd):$(pwd)"
           echo "PYTHONPATH: $PYTHONPATH"
           
           mkdir -p reports
