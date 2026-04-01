@@ -33,7 +33,22 @@ fi
 cp -r "$PROJECT_DIR" "$BACKUP_DIR"
 log "Backup created at: $BACKUP_DIR"
 
-log "[3/7] Pulling latest code from main branch..."
+log "[3/8] Configuring Git remote and pulling latest code..."
+
+# Ensure using SSH for GitHub access
+CURRENT_REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
+log "Current remote URL: $CURRENT_REMOTE"
+
+if [[ "$CURRENT_REMOTE" == *"github.com"* ]] && [[ "$CURRENT_REMOTE" != *"git@github.com"* ]]; then
+    log "Switching from HTTPS to SSH for GitHub access..."
+    git remote set-url origin git@github.com:volcengine/OpenViking.git
+    log "✅ Remote URL updated to: git@github.com:volcengine/OpenViking.git"
+elif [[ "$CURRENT_REMOTE" != *"github.com"* ]]; then
+    log "Setting correct remote URL..."
+    git remote set-url origin git@github.com:volcengine/OpenViking.git
+    log "✅ Remote URL set to: git@github.com:volcengine/OpenViking.git"
+fi
+
 git fetch origin
 git reset --hard origin/main
 git clean -fd
