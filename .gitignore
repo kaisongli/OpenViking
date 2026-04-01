@@ -105,6 +105,7 @@ Temporary Items
 
 # Config files - contains sensitive information
 config/settings.py
+tests/oc2ov_test/config/settings.py
 
 # Docker
 docker-compose.override.yml
