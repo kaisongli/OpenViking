@@ -54,9 +54,9 @@ jobs:
         run: |
           echo "📦 Installing test dependencies..."
           cd tests/oc2ov_test
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-html pytest-timeout
+          python3 -m pip install --upgrade pip
+          pip3 install -r requirements.txt
+          pip3 install pytest pytest-html pytest-timeout
           echo "✅ Dependencies installed"
 
       - name: Run P0 tests
