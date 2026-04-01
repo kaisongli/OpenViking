@@ -66,11 +66,16 @@ if [ "$INSTALL_MODE" = "site-packages" ]; then
     log "✅ Uninstalled site-packages version"
 fi
 
-log "[5/7] Cleaning previous build artifacts..."
+log "[5/8] Configuring Go proxy for China network..."
+export GOPROXY=https://goproxy.cn,direct
+export GOSUMDB=off
+log "✅ Go proxy configured: $GOPROXY"
+
+log "[6/8] Cleaning previous build artifacts..."
 make clean 2>/dev/null || true
 log "Clean completed"
 
-log "[6/7] Building and installing OpenViking in development mode..."
+log "[7/8] Building and installing OpenViking in development mode..."
 BUILD_SUCCESS=false
 for i in $(seq 1 $MAX_RETRIES); do
     log "Build attempt $i/$MAX_RETRIES..."
@@ -108,7 +113,7 @@ if [ "$BUILD_SUCCESS" = false ]; then
     exit 1
 fi
 
-log "[7/8] Restarting OpenClaw service..."
+log "[8/8] Restarting OpenClaw service..."
 if [ -f ~/.openclaw/openviking.env ]; then
     source ~/.openclaw/openviking.env
 else
