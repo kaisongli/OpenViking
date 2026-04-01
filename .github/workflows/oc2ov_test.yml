@@ -93,6 +93,21 @@ jobs:
           pip install pytest pytest-html pytest-timeout
           echo "✅ Dependencies installed in virtual environment"
 
+      - name: Create settings.py from example
+        run: |
+          echo "📝 Creating settings.py from settings.example.py..."
+          cd tests/oc2ov_test/config
+          
+          # Check if settings.py exists
+          if [ -f "settings.py" ]; then
+            echo "✅ settings.py already exists"
+          else
+            # Copy settings.example.py to settings.py
+            cp settings.example.py settings.py
+            echo "✅ settings.py created from settings.example.py"
+            echo "⚠️  Note: Using default settings. For custom settings, manually create settings.py on the ECS node."
+          fi
+
       - name: Run P0 tests
         id: run-tests
         run: |
