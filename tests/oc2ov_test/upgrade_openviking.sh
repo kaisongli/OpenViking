@@ -40,11 +40,22 @@ git clean -fd
 CURRENT_COMMIT=$(git rev-parse HEAD)
 log "Current commit: $CURRENT_COMMIT"
 
-log "[4/7] Cleaning previous build artifacts..."
+log "[4/7] Checking OpenViking installation mode..."
+INSTALL_MODE=$(python3 -c "import openviking; import os; path = openviking.__file__; print('dev' if 'site-packages' not in path else 'site-packages')" 2>/dev/null || echo "not_installed")
+log "Current installation mode: $INSTALL_MODE"
+
+if [ "$INSTALL_MODE" = "site-packages" ]; then
+    log "⚠️  OpenViking is installed in site-packages mode"
+    log "Uninstalling to switch to development mode..."
+    pip3 uninstall -y openviking 2>&1 | tee -a "$LOG_FILE" || true
+    log "✅ Uninstalled site-packages version"
+fi
+
+log "[5/7] Cleaning previous build artifacts..."
 make clean 2>/dev/null || true
 log "Clean completed"
 
-log "[5/7] Building and installing OpenViking..."
+log "[6/7] Building and installing OpenViking in development mode..."
 BUILD_SUCCESS=false
 for i in $(seq 1 $MAX_RETRIES); do
     log "Build attempt $i/$MAX_RETRIES..."
@@ -52,6 +63,17 @@ for i in $(seq 1 $MAX_RETRIES); do
     if make build 2>&1 | tee -a "$LOG_FILE"; then
         BUILD_SUCCESS=true
         log "Build completed successfully on attempt $i"
+        
+        INSTALL_PATH=$(python3 -c "import openviking; print(openviking.__file__)" 2>/dev/null || echo "unknown")
+        log "OpenViking installed at: $INSTALL_PATH"
+        
+        if [[ "$INSTALL_PATH" == *"$PROJECT_DIR"* ]]; then
+            log "✅ Confirmed: Using development mode (source code directory)"
+        else
+            log "⚠️  Warning: Not using source code directory"
+            log "Expected path to contain: $PROJECT_DIR"
+            log "Actual path: $INSTALL_PATH"
+        fi
         break
     else
         if [ $i -lt $MAX_RETRIES ]; then
@@ -71,7 +93,7 @@ if [ "$BUILD_SUCCESS" = false ]; then
     exit 1
 fi
 
-log "[6/7] Restarting OpenClaw service..."
+log "[7/8] Restarting OpenClaw service..."
 if [ -f ~/.openclaw/openviking.env ]; then
     source ~/.openclaw/openviking.env
 else
@@ -107,7 +129,7 @@ if [ "$RESTART_SUCCESS" = false ]; then
     exit 1
 fi
 
-log "[7/7] Verifying OpenViking installation..."
+log "[8/8] Verifying OpenViking installation..."
 OPENVIKING_VERSION=$(python3 -c "import openviking; print(openviking.__version__)" 2>/dev/null || echo "unknown")
 log "OpenViking version: $OPENVIKING_VERSION"
 

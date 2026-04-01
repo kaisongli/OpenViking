@@ -82,10 +82,10 @@ jobs:
           echo "🔄 Upgrading OpenViking to latest main branch..."
           
           # Make upgrade script executable
-          chmod +x scripts/upgrade_openviking.sh
+          chmod +x tests/oc2ov_test/upgrade_openviking.sh
           
           # Run upgrade script
-          bash scripts/upgrade_openviking.sh
+          bash tests/oc2ov_test/upgrade_openviking.sh
           
           echo "✅ OpenViking upgrade completed"
           
