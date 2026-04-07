@@ -21,22 +21,27 @@ class BaseOpenClawCLITest(unittest.TestCase):
         """
         测试类初始化
         """
-        session_id = f"test_session_{cls.__name__}"
-        cls.client = OpenClawCLIClient(session_id=session_id)
         cls.logger = logging.getLogger(cls.__name__)
         cls.wait_time = TEST_CONFIG["wait_time"]
         cls.assertion = AssertionHelper()
         cls.logger.info("=" * 60)
         cls.logger.info(f"测试类 {cls.__name__} 开始")
-        cls.logger.info(f"Session ID: {session_id}")
         cls.logger.info("=" * 60)
 
     def setUp(self):
         """
-        每个测试用例开始前
+        每个测试用例开始前 - 使用唯一的session ID避免上下文溢出
         """
+        # 为每个测试用例生成唯一的session ID
+        import uuid
+
+        unique_id = str(uuid.uuid4())[:8]
+        session_id = f"test_{self.__class__.__name__}_{self._testMethodName}_{unique_id}"
+        self.client = OpenClawCLIClient(session_id=session_id)
+
         self.logger.info("\n" + "-" * 60)
         self.logger.info(f"开始测试: {self._testMethodName}")
+        self.logger.info(f"Session ID: {session_id} (唯一ID避免上下文溢出)")
 
     def wait_for_sync(self, seconds: int = None):
         """

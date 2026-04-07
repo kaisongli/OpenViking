@@ -20,7 +20,7 @@ class TestSkillExperiencePrecipitation(BaseOpenClawCLITest):
         message1 = "请记住：我叫小明，今年25岁，住在上海"
         session_a = "skill_exp_a"
 
-        response1 = self.send_and_log(message1, session_id=session_a)
+        self.send_and_log(message1, session_id=session_a)
         self.wait_for_sync(30)
 
         self.logger.info("[2/2] 步骤2：验证信息读取")

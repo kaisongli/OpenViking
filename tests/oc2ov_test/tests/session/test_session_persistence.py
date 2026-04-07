@@ -20,7 +20,7 @@ class TestMemoryPersistence(BaseOpenClawCLITest):
         message = "我喜欢吃樱桃，日常喜欢喝美式咖啡"
         session_a = "persistence_test_a"
 
-        response1 = self.send_and_log(message, session_id=session_a)
+        self.send_and_log(message, session_id=session_a)
         self.wait_for_sync()
 
         self.logger.info("[2/5] 验证当前会话能读取记忆")
@@ -50,7 +50,7 @@ class TestMemoryPersistence(BaseOpenClawCLITest):
         message = "我喜欢吃芒果，日常喜欢喝拿铁咖啡"
         session_c = "persistence_test_c"
 
-        response1 = self.send_and_log(message, session_id=session_c)
+        self.send_and_log(message, session_id=session_c)
         self.wait_for_sync()
 
         self.logger.info("[2/5] 验证当前会话能读取记忆")
@@ -80,7 +80,7 @@ class TestMemoryPersistence(BaseOpenClawCLITest):
         message = "我喜欢吃草莓，日常喜欢喝抹茶拿铁"
         session_e = "persistence_test_e"
 
-        response1 = self.send_and_log(message, session_id=session_e)
+        self.send_and_log(message, session_id=session_e)
         self.wait_for_sync()
 
         self.logger.info("[2/5] 验证当前会话能读取记忆")
