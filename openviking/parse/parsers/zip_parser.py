@@ -15,11 +15,19 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.utils.zip_safe import safe_extract_zip
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _is_zip_metadata_entry(path: Path) -> bool:
+    """Return true for archive metadata that should not define a resource root."""
+    name = path.name
+    return name == "__MACOSX" or name == ".DS_Store" or name.startswith("._")
 
 
 class ZipParser(BaseParser):
@@ -56,26 +64,32 @@ class ZipParser(BaseParser):
         if not path.exists():
             raise FileNotFoundError(f"ZIP file not found: {path}")
 
-        # Check if it's a valid ZIP file (non-blocking)
-        def _is_zipfile() -> bool:
-            return zipfile.is_zipfile(path)
-
-        if not await asyncio.to_thread(_is_zipfile):
-            raise ValueError(f"Not a valid ZIP file: {path}")
-
         # Extract ZIP to temporary directory (non-blocking)
-        temp_dir = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_zip_"))
+        temp_dir = Path(
+            await asyncio.to_thread(
+                tempfile.mkdtemp,
+                prefix="ov_zip_",
+                dir=get_parser_download_temp_dir(),
+            )
+        )
         try:
             # Extract zip (non-blocking)
             def _extract_zip():
-                with zipfile.ZipFile(path, "r") as zipf:
-                    safe_extract_zip(zipf, temp_dir)
+                try:
+                    with zipfile.ZipFile(path, "r") as zipf:
+                        safe_extract_zip(zipf, temp_dir)
+                except zipfile.BadZipFile as exc:
+                    raise InvalidArgumentError(f"Not a valid ZIP file: {path.name}") from exc
 
             await asyncio.to_thread(_extract_zip)
 
             # Check if extracted content has a single root directory (non-blocking)
             def _list_entries():
-                return [p for p in temp_dir.iterdir() if p.name not in {".", ".."}]
+                return [
+                    p
+                    for p in temp_dir.iterdir()
+                    if p.name not in {".", ".."} and not _is_zip_metadata_entry(p)
+                ]
 
             extracted_entries = await asyncio.to_thread(_list_entries)
 

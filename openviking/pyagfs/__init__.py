@@ -10,7 +10,7 @@ import sys
 import sysconfig
 from pathlib import Path
 
-from .client import AGFSClient, FileHandle
+from .async_client import AsyncAGFSClient
 from .exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -30,12 +30,18 @@ from .exceptions import (
     AGFSNotADirectoryError,
     AGFSNotFoundError,
     AGFSNotSupportedError,
+    AGFSPathNotFoundError,
     AGFSPermissionDeniedError,
     AGFSPluginError,
+    AGFSResourceExhaustedError,
     AGFSSerializationError,
     AGFSTimeoutError,
+    GitConcurrentCommitError,
+    GitRestoreWritebackPartialError,
 )
 from .helpers import cp, download, upload
+from .leader import LeaderCandidate, Leadership
+from .protocols import AGFSSyncClientProtocol
 
 _logger = logging.getLogger(__name__)
 
@@ -93,26 +99,39 @@ def _find_ragfs_so():
     return None
 
 
-def _load_rust_binding():
-    """Attempt to load the Rust (PyO3) binding client.
+def _load_rust_module():
+    """Load the complete Rust PyO3 module from the installed or vendored artifact.
 
-    Searches openviking/lib/ for the pre-built native extension first,
-    then falls back to a pip-installed ``ragfs_python`` package.
+    Prefers the pip-installed ``ragfs_python`` package (e.g. from maturin develop),
+    then falls back to the vendored native extension in openviking/lib/.
     """
+    try:
+        import ragfs_python as rust_module
+
+        return rust_module
+    except ImportError:
+        pass
+
+    # Fallback: vendored .so in openviking/lib/
     try:
         so_path = _find_ragfs_so()
         if so_path:
             spec = importlib.util.spec_from_file_location("ragfs_python", so_path)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Unable to load Rust binding spec from {so_path}")
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
-            return mod.RAGFSBindingClient, None
-
-        # Fallback: maybe ragfs_python was pip-installed (dev environment)
-        from ragfs_python import RAGFSBindingClient as _Rust
-
-        return _Rust, None
+            return mod
     except Exception:
-        raise ImportError("Rust binding not available")
+        pass
+
+    raise ImportError("Rust binding not available")
+
+
+def _load_rust_binding():
+    """Attempt to load the Rust (PyO3) binding client."""
+    module = _load_rust_module()
+    return module.RAGFSBindingClient, None
 
 
 def get_binding_client():
@@ -127,6 +146,46 @@ def get_binding_client():
         return client, fh
     except ImportError as exc:
         raise ImportError("ragfs_python native library is not available: " + str(exc)) from exc
+
+
+def get_privacy_matcher_class():
+    """Return the native RAGFS PrivacyMatcher class."""
+    try:
+        module = _load_rust_module()
+        return module.PrivacyMatcher
+    except (ImportError, AttributeError) as exc:
+        raise ImportError(
+            "ragfs_python PrivacyMatcher is not available; rebuild the native extension"
+        ) from exc
+
+
+def get_privacy_extractor_class():
+    """Return the native fixed-rule credential extractor."""
+    try:
+        return _load_rust_module().PrivacyExtractor
+    except (ImportError, AttributeError) as exc:
+        raise ImportError(
+            "ragfs_python PrivacyExtractor is not available; rebuild the native extension"
+        ) from exc
+
+
+def reopen_rust_tracing_file() -> None:
+    """Reopen the Rust tracing log file after Python rotates the active file."""
+    try:
+        import ragfs_python as rust_module
+    except ImportError:
+        so_path = _find_ragfs_so()
+        if not so_path:
+            return
+        spec = importlib.util.spec_from_file_location("ragfs_python", so_path)
+        if spec is None or spec.loader is None:
+            return
+        rust_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rust_module)
+
+    reopen_hook = getattr(rust_module, "reopen_tracing_file", None)
+    if callable(reopen_hook):
+        reopen_hook()
 
 
 # Module-level defaults
@@ -145,10 +204,12 @@ except Exception:
     BindingFileHandle = None
 
 __all__ = [
-    "AGFSClient",
+    "AsyncAGFSClient",
+    "LeaderCandidate",
+    "Leadership",
+    "AGFSSyncClientProtocol",
     "AGFSBindingClient",
     "RAGFSBindingClient",
-    "FileHandle",
     "BindingFileHandle",
     "get_binding_client",
     "AGFSClientError",
@@ -157,6 +218,7 @@ __all__ = [
     "AGFSHTTPError",
     "AGFSNotSupportedError",
     "AGFSNotFoundError",
+    "AGFSPathNotFoundError",
     "AGFSAlreadyExistsError",
     "AGFSFileExistsError",
     "AGFSPermissionDeniedError",
@@ -165,6 +227,7 @@ __all__ = [
     "AGFSIsADirectoryError",
     "AGFSDirectoryNotEmptyError",
     "AGFSInvalidOperationError",
+    "AGFSResourceExhaustedError",
     "AGFSIoError",
     "AGFSConfigError",
     "AGFSMountPointNotFoundError",
@@ -173,6 +236,8 @@ __all__ = [
     "AGFSNetworkError",
     "AGFSInternalError",
     "AGFSPluginError",
+    "GitConcurrentCommitError",
+    "GitRestoreWritebackPartialError",
     "cp",
     "upload",
     "download",

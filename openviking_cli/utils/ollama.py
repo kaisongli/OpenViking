@@ -74,13 +74,20 @@ def parse_ollama_url(api_base: str | None) -> tuple[str, int]:
 # ---------------------------------------------------------------------------
 
 
+def _ollama_tags_url(host: str, port: int) -> str:
+    """Keep IPv6 host literals bracketed in the tags endpoint URL."""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:{port}/api/tags"
+
+
 def check_ollama_running(
     host: str = OLLAMA_DEFAULT_HOST,
     port: int = OLLAMA_DEFAULT_PORT,
 ) -> bool:
     """Return ``True`` if Ollama is responding at *host*:*port*."""
     try:
-        url = f"http://{host}:{port}/api/tags"
+        url = _ollama_tags_url(host, port)
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=3):
             return True
@@ -94,7 +101,7 @@ def get_ollama_models(
 ) -> list[str]:
     """Fetch names of locally available Ollama models."""
     try:
-        url = f"http://{host}:{port}/api/tags"
+        url = _ollama_tags_url(host, port)
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode())
@@ -226,6 +233,11 @@ def detect_ollama_in_config(config) -> tuple[bool, str, int]:
     Detection rules:
     - ``embedding.dense.provider == "ollama"``
     - ``vlm.provider == "litellm"`` **and** ``vlm.model`` starts with ``"ollama/"``
+    - ``query_planner.provider == "litellm"`` **and** ``query_planner.model``
+      starts with ``"ollama/"``
+
+    When several sections use Ollama, the host/port is taken from the first
+    match in the order embedding -> vlm -> query_planner.
     """
     host, port = OLLAMA_DEFAULT_HOST, OLLAMA_DEFAULT_PORT
     uses_ollama = False
@@ -246,6 +258,18 @@ def detect_ollama_in_config(config) -> tuple[bool, str, int]:
             if not uses_ollama:
                 # Only use VLM's URL if embedding didn't already set it
                 api_base = getattr(vlm, "api_base", None)
+                host, port = parse_ollama_url(api_base)
+            uses_ollama = True
+
+    # Check query planner (optional lightweight model for intent analysis)
+    query_planner = getattr(config, "query_planner", None)
+    if query_planner is not None:
+        qp_provider = getattr(query_planner, "provider", None)
+        qp_model = getattr(query_planner, "model", None) or ""
+        if qp_provider == "litellm" and qp_model.startswith("ollama/"):
+            if not uses_ollama:
+                # Only use the planner's URL if nothing earlier set it
+                api_base = getattr(query_planner, "api_base", None)
                 host, port = parse_ollama_url(api_base)
             uses_ollama = True
 

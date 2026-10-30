@@ -13,10 +13,10 @@ This package is the OpenClaw plugin `@openviking/openclaw-plugin`.
 
 | User intent | Command |
 | --- | --- |
-| Fresh install, latest | `openclaw plugins install @openviking/openclaw-plugin` |
-| Upgrade plugin to latest | `openclaw plugins install @openviking/openclaw-plugin` |
+| Fresh install, latest | `openclaw plugins install clawhub:@openviking/openclaw-plugin` |
+| Upgrade plugin to latest | `openclaw plugins install clawhub:@openviking/openclaw-plugin` |
 | Install or upgrade a specific release | Use the published ClawHub package selector if available; otherwise ask before using backup `ov-install --plugin-version=<REF>` |
-| Upgrade only the plugin | `openclaw plugins install @openviking/openclaw-plugin` |
+| Upgrade only the plugin | `openclaw plugins install clawhub:@openviking/openclaw-plugin` |
 | Show installed plugins | `openclaw plugins list` |
 | Backup install when ClawHub is unavailable | `npx -y openclaw-openviking-setup-helper@latest --base-url <URL> [--api-key <KEY>]` |
 | Operate on a specific OpenClaw instance | add `--workdir <path>` |
@@ -31,7 +31,7 @@ clawhub install openviking
 That installs an AgentSkill, not the plugin. The plugin install command is:
 
 ```bash
-openclaw plugins install @openviking/openclaw-plugin
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 ```
 
 ## Required Inputs
@@ -42,6 +42,7 @@ Before setup, determine:
 | --- | --- | --- |
 | OpenViking base URL | Yes | Ask user or read `OPENVIKING_BASE_URL` |
 | API key | Usually | Ask user or read `OPENVIKING_API_KEY` |
+| Memory scope | Optional; default `none` | Ask whether memory is shared, separated by assistant, or separated by sender. Use `sender`. |
 | Account ID | Only for root API keys | Ask user if setup reports root-key tenant context is needed |
 | User ID | Only for root API keys | Ask user if setup reports root-key tenant context is needed |
 | Slot replacement approval | Only if another context engine owns the slot | Ask user before using `--force-slot` |
@@ -53,7 +54,7 @@ Never silently replace another context engine.
 Use this workflow for normal installs and upgrades from published packages.
 
 ```bash
-openclaw plugins install @openviking/openclaw-plugin
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --json
 openclaw gateway restart
 openclaw openviking status --json
@@ -71,6 +72,23 @@ Run setup with `--json` whenever possible:
 
 ```bash
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --json
+```
+
+Choose memory scope before building that command:
+
+| Value | Concrete layout | Use when |
+| --- | --- | --- |
+| `none` (default; omit the flag) | Shared `viking://user/<user_id>/memories/...`; no concrete peer memory subtree | General case |
+| `assistant` | Assistant-attributed peer memory under `.../peers/<assistant_id>/memories/...` | A human is the OpenViking user and uses multiple OpenClaw assistants |
+| `sender` | Sender-attributed peer memory under `.../peers/<sender_id>/memories/...` | An agent is the OpenViking user and receives messages from multiple humans |
+
+Setup rejects `person`; always pass `sender`. An existing config that still says `person` keeps working as `sender`. OpenViking initializes the managed `peers/` container for every user; `none` only means that no concrete `peers/<peer_id>/memories` subtree is used. Actor-peer recall includes shared user memory plus the current peer memory, and changing the scope does not move existing memories.
+
+Examples:
+
+```bash
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --json
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role sender --json
 ```
 
 Branch on the result:
@@ -96,10 +114,10 @@ openclaw openviking setup \
   --json
 ```
 
-Custom agent routing prefix (optional; only when the user explicitly requests a prefix):
+Custom assistant routing prefix (optional; only with `peer_role=assistant` and when the user explicitly requests a prefix):
 
 ```bash
-openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --agent-prefix <PREFIX> --json
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
 ```
 
 Slot replacement retry, only after user approval:
@@ -139,7 +157,8 @@ Also inspect:
 | `health.version` | Records server version |
 | `health.compatibility` | Determines whether to warn |
 | `config.hasApiKey` | Confirms whether an API key was saved |
-| `config.agent_prefix` | Confirms configured agent prefix when present |
+| `config.peer_role` | Confirms `none`, `assistant`, or canonical `sender` scope |
+| `config.peer_prefix` | Confirms configured peer prefix when present |
 
 ## Environment Detection
 
@@ -153,11 +172,11 @@ openclaw --version
 Requirements:
 
 - Node.js >= 22
-- OpenClaw >= 2026.4.8
+- OpenClaw >= 2026.5.27
 
 Version boundaries:
 
-- `2026.4.8` is the minimum supported OpenClaw version for the current `@openviking/openclaw-plugin` plugin.
+- `2026.5.27` is the minimum supported OpenClaw version for the current `@openviking/openclaw-plugin` plugin.
 - `2026.5.3` starts requiring compiled JavaScript runtime output during package install when a plugin package declares TypeScript entries.
 - `2026.5.4` and later no longer fall back to `.ts` source for installed/global plugin runtime loading when the compiled JavaScript output is missing; the plugin may be skipped.
 - Published ClawHub packages are built before release and include `dist/*.js`, so normal users do not need to build locally.
@@ -220,7 +239,7 @@ openclaw plugins list
 Fresh install:
 
 ```bash
-openclaw plugins install @openviking/openclaw-plugin
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --json
 openclaw gateway restart
 openclaw openviking status --json
@@ -267,7 +286,8 @@ Core fields:
 | `mode` | Legacy compatibility field. Expected value: `remote`. |
 | `baseUrl` | OpenViking HTTP endpoint |
 | `apiKey` | OpenViking API key |
-| `agent_prefix` | Optional; prefix for OpenClaw agent IDs when set. Interactive setup accepts only letters, digits, `_`, and `-`. If unset, the plugin follows session agent IDs. |
+| `peer_role` | `none` (shared user memory), `assistant` (`peers/<assistant_id>`), or `sender` (`peers/<sender_id>`). Legacy `person` is accepted as `sender`. |
+| `peer_prefix` | Optional only with `peer_role=assistant`; prefix for OpenClaw agent IDs. Interactive setup accepts only letters, digits, `_`, and `-`. If unset, the plugin follows session agent IDs. |
 | `accountId` | Required for root API keys |
 | `userId` | Required for root API keys |
 
@@ -307,7 +327,7 @@ Same plugin ID (openviking, >= 0.3.x):
 
 ```bash
 rm -rf ~/.openclaw/extensions/openviking/
-openclaw plugins install @openviking/openclaw-plugin
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 openclaw openviking setup --reconfigure
 openclaw gateway restart
 openclaw openviking status --json
@@ -319,7 +339,7 @@ Old plugin ID (memory-openviking, < 0.3.x):
 openclaw plugins uninstall memory-openviking 2>/dev/null || true
 openclaw config set plugins.slots.memory none
 rm -rf ~/.openclaw/extensions/memory-openviking/
-openclaw plugins install @openviking/openclaw-plugin
+openclaw plugins install clawhub:@openviking/openclaw-plugin
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --json
 openclaw gateway restart
 openclaw openviking status --json
@@ -329,11 +349,12 @@ Existing config fields are preserved during migration. The new plugin reads old 
 
 - `baseUrl`
 - `apiKey`
-- `agent_prefix`: optional; interactive setup accepts only letters, digits, `_`, and `-`
+- `peer_role`: optional; `none`, `assistant`, or `sender`; legacy `person` is accepted as `sender`
+- `peer_prefix`: optional only with `peer_role=assistant`; interactive setup accepts only letters, digits, `_`, and `-`
 
 ## Backup Path: ov-install
 
-`ov-install` is the backup path, not the primary user install path. Use it when `openclaw plugins install @openviking/openclaw-plugin` cannot reach ClawHub, is rate-limited, or when the user explicitly wants a source ref / Git branch install.
+`ov-install` is the backup path, not the primary user install path. Use it when `openclaw plugins install clawhub:@openviking/openclaw-plugin` cannot reach ClawHub, is rate-limited, or when the user explicitly wants a source ref / Git branch install.
 
 Backup install:
 
@@ -352,4 +373,4 @@ Backup/source commands:
 | Show helper-tracked version | `ov-install --current-version` |
 | Update helper-managed install | `ov-install --update` |
 
-For user installs, always try `openclaw plugins install @openviking/openclaw-plugin` first. Choose `ov-install` only as the backup path.
+For user installs, always try `openclaw plugins install clawhub:@openviking/openclaw-plugin` first. Choose `ov-install` only as the backup path.

@@ -79,7 +79,6 @@ class BenchmarkConfig:
     api_key: Optional[str]
     account: Optional[str]
     user: Optional[str]
-    agent_id: Optional[str]
     timeout: float
     adapters: List[str]
     profile: str
@@ -106,11 +105,6 @@ class BenchmarkConfig:
     ov_bin: str
     seed: int
     find_limit: int
-
-
-def direct_http_agent_id(config: BenchmarkConfig) -> str:
-    """Avoid loading the user's global ovcli.conf when agent_id is unset."""
-    return config.agent_id or ""
 
 
 @dataclass
@@ -222,11 +216,9 @@ class LoadAdapter:
 
     async def observer_queue(self) -> Any: ...
 
-    async def add_resource(
-        self, *, path: str, to: str, reason: str, wait: bool, timeout: Optional[float]
-    ) -> Any: ...
+    async def add_resource(self, *, path: str, to: str, reason: str, wait: bool) -> Any: ...
 
-    async def wait_processed(self, timeout: Optional[float]) -> Any: ...
+    async def wait_processed(self) -> Any: ...
 
     async def find(self, *, query: str, target_uri: str, limit: int) -> Any: ...
 
@@ -266,7 +258,6 @@ class AsyncHTTPAdapter(LoadAdapter):
             api_key=self._config.api_key,
             account=self._config.account,
             user=self._config.user,
-            agent_id=direct_http_agent_id(self._config),
             timeout=self._config.timeout,
             extra_headers={},
         )
@@ -285,20 +276,16 @@ class AsyncHTTPAdapter(LoadAdapter):
     async def observer_queue(self) -> Any:
         return await self._client._get_queue_status()
 
-    async def add_resource(
-        self, *, path: str, to: str, reason: str, wait: bool, timeout: Optional[float]
-    ) -> Any:
+    async def add_resource(self, *, path: str, to: str, reason: str, wait: bool) -> Any:
         return await self._client.add_resource(
             path=path,
             to=to,
-            reason=reason,
             wait=wait,
-            timeout=timeout,
-            strict=False,
+            options={"reason": reason, "strict": False},
         )
 
-    async def wait_processed(self, timeout: Optional[float]) -> Any:
-        return await self._client.wait_processed(timeout=timeout)
+    async def wait_processed(self) -> Any:
+        return await self._client.wait_processed()
 
     async def find(self, *, query: str, target_uri: str, limit: int) -> Any:
         result = await self._client.find(query=query, target_uri=target_uri, limit=limit)
@@ -361,21 +348,14 @@ class CliSubprocessAdapter(LoadAdapter):
     async def observer_queue(self) -> AdapterResult:
         return await self._run(["observer", "queue"])
 
-    async def add_resource(
-        self, *, path: str, to: str, reason: str, wait: bool, timeout: Optional[float]
-    ) -> AdapterResult:
+    async def add_resource(self, *, path: str, to: str, reason: str, wait: bool) -> AdapterResult:
         args = ["add-resource", path, "--to", to, "--reason", reason]
         if wait:
             args.append("--wait")
-            if timeout is not None:
-                args.extend(["--timeout", str(timeout)])
         return await self._run(args, operation_timeout=max(self._config.timeout, 60.0))
 
-    async def wait_processed(self, timeout: Optional[float]) -> AdapterResult:
-        args = ["wait"]
-        if timeout is not None:
-            args.extend(["--timeout", str(timeout)])
-        return await self._run(args, operation_timeout=timeout or self._config.timeout)
+    async def wait_processed(self) -> AdapterResult:
+        return await self._run(["wait"])
 
     async def find(self, *, query: str, target_uri: str, limit: int) -> AdapterResult:
         return await self._run(["find", query, "--uri", target_uri, "-n", str(limit)])
@@ -541,7 +521,6 @@ class BenchmarkRunner:
             api_key=self.config.api_key,
             account=self.config.account,
             user=self.config.user,
-            agent_id=direct_http_agent_id(self.config),
             timeout=self.config.timeout,
             extra_headers={},
         )
@@ -573,7 +552,6 @@ class BenchmarkRunner:
             api_key=self.config.api_key,
             account=self.config.account,
             user=self.config.user,
-            agent_id=direct_http_agent_id(self.config),
             timeout=self.config.timeout,
             extra_headers={},
         )
@@ -670,7 +648,6 @@ class BenchmarkRunner:
                         to=uri,
                         reason="OpenViking server load benchmark",
                         wait=False,
-                        timeout=None,
                     ),
                     resource_uri=resource_uri,
                     worker_id=worker_id,
@@ -693,7 +670,7 @@ class BenchmarkRunner:
             adapter,
             scenario,
             "wait_processed",
-            lambda: adapter.wait_processed(timeout=self.config.drain_timeout),
+            lambda: asyncio.wait_for(adapter.wait_processed(), timeout=self.config.drain_timeout),
         )
         self.recorder.add_phase(
             PhaseMetadata(
@@ -913,7 +890,6 @@ class BenchmarkRunner:
                         to=uri,
                         reason="OpenViking mixed load benchmark",
                         wait=False,
-                        timeout=None,
                     ),
                     resource_uri=resource_uri,
                     worker_id=worker_id,
@@ -1003,7 +979,7 @@ class BenchmarkRunner:
                 "glob",
                 lambda: adapter.glob(
                     uri=self.config.data_root_uri,
-                    pattern="*.md",
+                    pattern="**/*.md",
                     limit=self.config.find_limit,
                 ),
                 worker_id=worker_id,
@@ -1255,7 +1231,6 @@ def build_cli_config_payload(config: BenchmarkConfig) -> Dict[str, Any]:
         "api_key": config.api_key,
         "account": config.account,
         "user": config.user,
-        "agent_id": config.agent_id,
         "timeout": config.timeout,
         "extra_headers": None,
     }
@@ -1858,7 +1833,6 @@ def parse_args(argv: Optional[List[str]] = None) -> BenchmarkConfig:
     parser.add_argument("--api-key", default=os.getenv("OPENVIKING_API_KEY", "test-root-api-key"))
     parser.add_argument("--account", default=os.getenv("OPENVIKING_ACCOUNT", "default"))
     parser.add_argument("--user", default=os.getenv("OPENVIKING_USER", "default"))
-    parser.add_argument("--agent-id", default=os.getenv("OPENVIKING_AGENT_ID"))
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument(
         "--adapters",
@@ -1921,7 +1895,6 @@ def parse_args(argv: Optional[List[str]] = None) -> BenchmarkConfig:
         api_key=args.api_key or None,
         account=args.account or None,
         user=args.user or None,
-        agent_id=args.agent_id or None,
         timeout=max(0.1, args.timeout),
         adapters=adapters,
         profile=args.profile,

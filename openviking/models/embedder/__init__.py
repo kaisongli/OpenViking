@@ -19,10 +19,12 @@ Supported providers:
 """
 
 from openviking.models.embedder.base import (
+    AllCredentialsFailedError,
     CompositeHybridEmbedder,
     DenseEmbedderBase,
     EmbedderBase,
     EmbedResult,
+    FailoverEmbedder,
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
@@ -42,6 +44,7 @@ except ImportError:
     LiteLLMDenseEmbedder = None  # litellm not installed
 from openviking.models.embedder.minimax_embedders import MinimaxDenseEmbedder
 from openviking.models.embedder.openai_embedders import OpenAIDenseEmbedder
+from openviking.models.embedder.retry_embedder import RetryEmbedder
 from openviking.models.embedder.vikingdb_embedders import (
     VikingDBDenseEmbedder,
     VikingDBHybridEmbedder,
@@ -66,6 +69,9 @@ __all__ = [
     "SparseEmbedderBase",
     "HybridEmbedderBase",
     "CompositeHybridEmbedder",
+    "FailoverEmbedder",
+    "RetryEmbedder",
+    "AllCredentialsFailedError",
     # Google Gemini implementations
     "GeminiDenseEmbedder",
     # Jina AI implementations

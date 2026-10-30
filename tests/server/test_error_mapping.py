@@ -3,10 +3,32 @@
 
 """Focused tests for HTTP server exception-to-error mapping."""
 
-from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError
+import httpx
+import pytest
+
+from openviking.pyagfs.exceptions import (
+    AGFSClientError,
+    AGFSDirectoryNotEmptyError,
+    AGFSHTTPError,
+    AGFSInternalError,
+    AGFSIsADirectoryError,
+    AGFSNotADirectoryError,
+    AGFSNotSupportedError,
+    AGFSPluginError,
+    AGFSResourceExhaustedError,
+    GitConcurrentCommitError,
+)
 from openviking.server.error_mapping import map_exception
+from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-from openviking_cli.exceptions import FailedPreconditionError, InvalidURIError, NotFoundError
+from openviking.utils.exceptions import AllCredentialsFailedError
+from openviking_cli.exceptions import (
+    FailedPreconditionError,
+    InvalidArgumentError,
+    InvalidURIError,
+    NotFoundError,
+    ResourceExhaustedError,
+)
 
 
 class _UpstreamHTTPError(Exception):
@@ -59,6 +81,52 @@ def test_agfs_http_status_keeps_storage_mapping():
     assert isinstance(mapped, NotFoundError)
     assert mapped.code == "NOT_FOUND"
     assert mapped.message == "File not found: viking://missing"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_details"),
+    [
+        (AGFSIsADirectoryError("is a directory"), {"expected": "file", "actual": "directory"}),
+        (IsADirectoryError("is a directory"), {"expected": "file", "actual": "directory"}),
+        (AGFSNotADirectoryError("not a directory"), {}),
+        (NotADirectoryError("not a directory"), {}),
+        (AGFSPluginError("plugin error: not a directory: /resources/file.md"), {}),
+        (AGFSClientError("not a directory"), {}),
+        (ValueError("not a directory"), {}),
+        (AGFSDirectoryNotEmptyError("directory not empty"), {}),
+    ],
+)
+def test_file_directory_misuse_maps_to_invalid_argument(error, expected_details):
+    mapped = map_exception(
+        error,
+        resource="viking://resources/docs",
+        resource_type="file",
+    )
+
+    assert isinstance(mapped, InvalidArgumentError)
+    assert mapped.code == "INVALID_ARGUMENT"
+    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == 400
+    assert mapped.details == {
+        "resource": "viking://resources/docs",
+        **expected_details,
+    }
+
+
+def test_agfs_not_supported_maps_to_unimplemented():
+    mapped = map_exception(AGFSNotSupportedError("git feature disabled"))
+
+    assert mapped is not None
+    assert mapped.code == "UNIMPLEMENTED"
+
+
+def test_agfs_resource_limit_maps_to_resource_exhausted():
+    mapped = map_exception(
+        AGFSResourceExhaustedError("blob exceeds configured limit"),
+        resource="viking://user/test/memories/experiences/example.md",
+    )
+
+    assert isinstance(mapped, ResourceExhaustedError)
+    assert mapped.code == "RESOURCE_EXHAUSTED"
 
 
 def test_value_error_invalid_uri_maps_to_invalid_uri():
@@ -120,12 +188,74 @@ def test_upstream_text_status_maps_to_permission_denied():
     assert mapped.details["upstream_status_code"] == 403
 
 
-def test_upstream_502_maps_to_unavailable():
-    mapped = map_exception(RuntimeError("Volcengine embedding failed: HTTP 502 Bad Gateway"))
+@pytest.mark.parametrize(
+    ("errors", "expected_code", "expected_status"),
+    [
+        ([RuntimeError("Volcengine embedding failed: HTTP 502 Bad Gateway")], "UNAVAILABLE", 503),
+        (
+            [httpx.ReadTimeout("Request timed out."), httpx.ConnectTimeout("Request timed out.")],
+            "DEADLINE_EXCEEDED",
+            504,
+        ),
+        (
+            [httpx.ConnectError("Connection refused"), httpx.ReadError("Connection reset")],
+            "UNAVAILABLE",
+            503,
+        ),
+        (
+            [
+                _UpstreamHTTPError(401, "invalid_api_key"),
+                _UpstreamHTTPError(401, "invalid_api_key"),
+            ],
+            "UNAUTHENTICATED",
+            401,
+        ),
+        (
+            [_UpstreamHTTPError(401, "invalid_api_key"), httpx.ReadTimeout("Request timed out.")],
+            "INTERNAL",
+            500,
+        ),
+        (
+            [httpx.ReadTimeout("Request timed out."), _UpstreamHTTPError(401, "invalid_api_key")],
+            "INTERNAL",
+            500,
+        ),
+        (
+            [httpx.ReadTimeout("Request timed out."), RuntimeError("Unexpected tensor shape")],
+            "INTERNAL",
+            500,
+        ),
+        (
+            [
+                ValueError("Embedding provider api_key is required"),
+                httpx.ReadTimeout("Request timed out."),
+            ],
+            "INTERNAL",
+            500,
+        ),
+    ],
+)
+def test_upstream_failures_keep_their_status_through_wrappers(
+    errors, expected_code, expected_status
+):
+    failures = []
+    for index, error in enumerate(errors):
+        wrapped = RuntimeError(f"Volcengine embedding failed: {error}")
+        wrapped.__cause__ = error
+        failures.append((f"credential-{index}", "unknown", wrapped, index))
+
+    aggregate = AllCredentialsFailedError(failures)
+    outer = RuntimeError(f"Embedding failed: {aggregate}")
+    outer.__cause__ = aggregate
+    mapped = map_exception(outer)
 
     assert mapped is not None
-    assert mapped.code == "UNAVAILABLE"
-    assert mapped.details["upstream_status_code"] == 502
+    assert mapped.code == expected_code
+    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == expected_status
+    if expected_code == "INTERNAL":
+        assert mapped.message == str(outer)
+    else:
+        assert mapped.details["upstream_error_type"] == "AllCredentialsFailedError"
 
 
 def test_model_api_key_configuration_error_maps_to_failed_precondition():
@@ -163,17 +293,53 @@ def test_resource_busy_maps_to_structured_conflict():
     }
 
 
-def test_lock_acquisition_maps_to_structured_conflict():
+@pytest.mark.parametrize(
+    ("error", "expected_code", "expected_status"),
+    [
+        (LockAcquisitionError("Failed to acquire exact lock"), "CONFLICT", 409),
+        (AGFSInternalError("invalid lock token: missing ':' in token"), "INTERNAL", 500),
+        (AGFSInternalError("lock I/O error: failed to create lock dir"), "INTERNAL", 500),
+        (AGFSInternalError("AES-GCM authentication failed: aead::Error"), "INTERNAL", 500),
+        (AGFSPluginError("plugin error: backend connection lost"), "UNAVAILABLE", 503),
+    ],
+)
+def test_storage_conflicts_remain_distinct_from_failures(error, expected_code, expected_status):
     mapped = map_exception(
-        LockAcquisitionError("Failed to acquire exact lock"),
+        error,
         resource="viking://resources/docs/a.md",
     )
 
     assert mapped is not None
+    assert mapped.code == expected_code
+    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == expected_status
+    if expected_code == "CONFLICT":
+        assert mapped.details == {
+            "resource": "viking://resources/docs/a.md",
+            "uri": "viking://resources/docs/a.md",
+            "conflict_type": "path_busy",
+            "retryable": True,
+        }
+
+
+def test_git_concurrent_commit_maps_to_conflict():
+    err = GitConcurrentCommitError("ref moved")
+    mapped = map_exception(err)
+    assert mapped is not None
     assert mapped.code == "CONFLICT"
-    assert mapped.details == {
-        "resource": "viking://resources/docs/a.md",
-        "uri": "viking://resources/docs/a.md",
-        "conflict_type": "path_busy",
-        "retryable": True,
-    }
+    assert ERROR_CODE_TO_HTTP_STATUS.get(mapped.code) == 409
+
+
+def test_git_auth_failure_remains_a_client_error():
+    from openviking.server.responses import error_response, response_from_result
+    from openviking.utils.git_auth import GIT_AUTH_FAILED, raise_git_auth_error
+    from openviking_cli.exceptions import OpenVikingError
+
+    with pytest.raises(OpenVikingError) as caught:
+        raise_git_auth_error(b"fatal: Authentication failed")
+    error = map_exception(caught.value)
+    assert error.code == GIT_AUTH_FAILED
+    assert ERROR_CODE_TO_HTTP_STATUS.get(error.code, 500) == 400
+    assert error_response(error.code, error.message).status_code == 400
+    assert response_from_result(
+        {"status": "error", "code": error.code, "errors": [error.message]}
+    ).status_code == 400

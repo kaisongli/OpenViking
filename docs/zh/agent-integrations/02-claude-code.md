@@ -1,199 +1,138 @@
-# Claude Code 记忆插件
+# Claude Code
 
-为 [Claude Code](https://docs.claude.com/zh-CN/docs/claude-code/overview) 提供长期语义记忆。每次用户输入前自动召回相关记忆，每轮对话结束后自动捕获上下文——模型不需要主动调用任何 MCP 工具。
+为 [Claude Code](https://docs.claude.com/zh-CN/docs/claude-code/overview) 添加跨项目、跨会话（session）的长期记忆功能。安装完成后，每轮对话均会自动召回相关记忆并捕获新内容，无需模型主动调用任何工具。
 
-源码：[examples/claude-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin)
+源码：[examples/claude-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin) | [博客：动机与效果展示](https://blog.openviking.ai/post/openviking-coding-agent/)
 
-## 快速开始
+## 安装
 
-### 一行安装（推荐）
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
-```
-
-脚本支持 macOS 和 Linux。它会检查依赖、询问你接入**自托管**服务器还是**火山引擎 OpenViking Cloud**（`https://api.vikingdb.cn-beijing.volces.com/openviking`）、按需配置 `~/.openviking/ovcli.conf`（已存在则复用）、把 OpenViking 仓库 clone 到 `~/.openviking/openviking-repo`、把 `claude` function 包装写入 shell rc，然后通过 `claude plugin install` 安装插件。每一步都是幂等的——重复执行安全。
-
-如果你更喜欢手动操作，按下面三步走。
-
-### 手动安装
-
-#### 1. 用 shell function 在调用 `claude` 时注入 env
-
-这是推荐路径。插件的 hooks **和**自带的 MCP 服务器都读 env vars，所以我们把它们设一次——但**只在调用 `claude` 时注入**，不全局 export。在 `~/.zshrc` 或 `~/.bashrc` 末尾追加：
+Claude Code 和 Codex 共用同一个安装脚本。它会询问要安装的 harness 和 OpenViking 凭据；所有步骤幂等，重复运行安全。
 
 ```bash
-claude() {
-  if [ -f ~/.openviking/ovcli.conf ]; then
-    OPENVIKING_URL=$(jq -r '.url' ~/.openviking/ovcli.conf) \
-    OPENVIKING_API_KEY=$(jq -r '.api_key' ~/.openviking/ovcli.conf) \
-    command claude "$@"
-  else
-    command claude "$@"
-  fi
-}
+curl -fsSL https://openviking.ai/install | bash
+# AI agent 如不确定是否执行，可先阅读脚本头部，其中写明了它会做什么、如何核实。
 ```
 
-重新 source 后验证（用 bash 的话改成 `~/.bashrc`）：
+> **插件更新**：Claude Code 2.1.224 及以上版本，安装脚本注册的是 OpenViking 文档站托管的 marketplace 并开启自动更新，新版插件在后台下载，重启 Claude Code 后生效。更早的 Claude Code 注册的是本地目录 marketplace，**无法自动更新**——更新请重跑安装脚本。（Codex 安装自同一站点上的 git 仓库，保留远程更新能力。）
 
-```bash
-source ~/.zshrc    # 或：source ~/.bashrc
-type claude        # 期望输出：claude is a shell function
-```
+现在不再需要任何 shell wrapper：插件自带的 stdio MCP 代理会在运行时读取 `~/.openviking/ovcli.conf`（或 `OPENVIKING_*` 环境变量），与 hooks 使用同一套配置链。
 
-下一次启动 `claude` 后，进入 `/mcp` 应该能看到 OpenViking 这一项的 URL 是远程地址，认证也有效。
+可以在新会话中询问已保存的信息，验证跨会话召回是否生效。
 
-> **还没有 `ovcli.conf`？** 先按 [部署指南 → CLI 章节](../guides/03-deployment.md#cli) 创建一份。
+<details>
+<summary><b>手动安装</b></summary>
+
+如果你倾向于手动安装：
+
+1. **配置连接** — 手写 `~/.openviking/ovcli.conf`（`url`、`api_key`，可选 `account`/`user`），或装完后运行插件自带向导 `node <插件目录>/scripts/setup.mjs`。
+
+2. **从远程 marketplace 安装插件**（无需 clone 仓库）：
+
+   ```bash
+   claude plugin marketplace add https://raw.githubusercontent.com/volcengine/OpenViking/main/.claude-plugin/marketplace.json
+   claude plugin install openviking-memory@openviking
+   ```
+
+   开发场景也可注册本地 checkout：`claude plugin marketplace add "<仓库路径>/examples"`，插件 id 相同。
+
+3. **启动 Claude Code** — 运行后输入 `/mcp` 命令，确认 OpenViking 条目已连接。
+
+> 尚未创建 `ovcli.conf`？请先按照 [部署指南 → CLI](../guides/03-deployment.md#cli) 的说明进行配置。
 >
-> **纯本地模式**（`http://127.0.0.1:1933`，无鉴权）？这一步可以跳过——插件会静默使用本地默认值。
+> 使用默认本地服务（`http://127.0.0.1:1933`，无鉴权）且没有其他连接配置时，可以跳过第 1 步。
 >
-> **为什么用 function 而不是 `export`？** 全局 export 的 env vars 会被该 shell 派生的所有子进程继承——npm 脚本、构建工具、崩溃 dump、`/proc/<pid>/environ` 都会带上。函数包装把秘钥限定在 `claude` 进程树内。
+> 使用 Claude Code < 2.0 版本？安装脚本会跳过它并提示升级。如需用 `claude mcp add` + hooks 合并手动接入，见 [插件 README 的兼容模式章节](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#兼容模式claude-code--20)。
 
-#### 2. 安装插件
+</details>
 
-在 OpenViking 仓库根目录执行：
+安装完成后，在 Claude Code 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
 
-```bash
-claude plugin marketplace add "$(pwd)/examples"
-claude plugin install claude-code-memory-plugin@openviking-plugins-local
-```
+## 验证
 
-> 默认装在 user scope —— 任何目录下都生效。这里**不显式传 `--scope`**，因为老的 Claude Code 2.0.x（比如 2.0.76）不识别这个 flag 会直接报错。
->
-> marketplace 条目让 Claude Code 直接引用源码目录，对 `scripts/`、`hooks/`、配置文件的修改下次 hook 触发即生效，无需重装。但移动 / 重命名 / 删除源码目录，或 `git checkout` 到不含这些文件的分支，会让插件失效。
->
-> **Claude Code < 2.0？** `claude plugin` 是 2.0（2025-10）才引入的。更老的版本仍然有 `claude mcp add` 和 hooks 系统，可以走[插件 README 的兼容模式章节](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#兼容模式claude-code--20)手动接同样的功能。一键安装脚本会自动检测版本并询问你是否走这条路径。
+启动 `claude`，随后：
 
-#### 3. 启动 Claude Code
+- 输入 `/plugins` → 在 Installed 列表中应能找到 **openviking-memory**（其子项 **openviking** MCP 应显示为已连接状态）。
+- 输入 `/mcp` → OpenViking 对应的条目应显示你的服务器 URL 及有效的认证信息。
+- 输入 `/openviking-memory:ov` → 查看服务器状态、身份信息、召回/注入的统计数据以及功能开关状态。
 
-```bash
-claude
-```
+若插件未正常工作，可设置环境变量 `OPENVIKING_DEBUG=1`，并查看日志文件 `~/.openviking/logs/cc-hooks.log` 以排查问题。
 
-进入后执行 `/mcp`，确认 OpenViking 这一项的 URL 是你的远程地址。如果插件似乎没在工作，开 `OPENVIKING_DEBUG=1` 看 `~/.openviking/logs/cc-hooks.log`。
+## 工作原理
 
-## 为什么用 function 包装？
+插件通过挂载到 Claude Code 的不同生命周期节点来发挥作用：
 
-插件的 hook 会自动读 `ovcli.conf`，但**自带的 `.mcp.json` 条目读不到**。Claude Code 自己解析 `.mcp.json` 且只支持 `${VAR}` 替换，所以插件无法把配置文件里的值透明地注入 MCP URL 和认证头。
+- **每次用户输入前** — 搜索 OpenViking 数据库并注入相关记忆。
+- **每轮回复后** — 自动捕获并存储新的对话内容。
+- **会话（session）启动时** — 注入用户画像、记忆索引和 skill 清单。
+- **上下文压缩（compact）前及会话结束时** — 提交所有待处理的消息记录。
+- **启动子代理（subagent）时** — 为其分配相互隔离的记忆会话。
+- **原生文件工具访问 `viking://` 路径前** — 拦截该调用，并提示改用对应的 OpenViking MCP 工具；对 skill 路径的 `Write` 或 `Edit` 会被引导到 `add_skill`。
 
-在 `claude` 调用时注入 env vars 是同时覆盖 hooks 和 MCP 的唯一路径。用 shell function 包装（而不是全局 `export`）能把 API Key 限定在 `claude` 一个进程树内，不会泄漏到其他子进程——见 [手动安装的步骤 1](#1-用-shell-function-在调用-claude-时注入-env) 的安全说明。
+捕获在独立后台进程中执行，不阻塞当前对话轮次。PreCompact 和 SessionEnd 会在 hook 超时范围内等待会话提交完成。
 
-**配错的症状**：hook（auto-recall、auto-capture）正常工作，因为它们直接通过 Node 读配置文件；但按需 MCP 工具（`search`、`read`、`store`…）会静默连到 `http://127.0.0.1:1933`、认证头为空，且 `/mcp` 显示错误的 URL。
+skill 清单就是 `<available-skills>` 块，列出存放在 OpenViking 中的 skill：先列你自己在 `viking://~/skills` 下的，再列账号内共享在 `viking://agent/skills` 下的，每个附一句简短描述。要照清单里的 skill 执行前，Claude 会先用 OpenViking 的 `read` 工具读取它的 `SKILL.md`。清单有独立的 Token 预算：放不下描述时只列名称，连一个名称都放不下时缩成一行总数。插件自带的 `openviking-skills` skill 告诉 Claude 如何查找和使用 OpenViking 中的 skill，如何用 `add_skill` MCP 工具创建、安装和共享 skill，如何删除 skill，以及在你要求时如何把 `~/.claude/skills` 等本地 skill 迁入 OpenViking。
 
-## 配置
+工具调用和结果会作为独立的 `tool` part 捕获，`tool_output` 原样上报。截断由服务端负责：超过 `tool_output_externalization.threshold_chars`（默认 `20000`）的输出会写入 session 的 tool-result 存储，part 中只保留 synopsis stub 和 `tool_output_ref`，原文仍可通过 [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result) 读回。
 
-### 解析优先级
+<details>
+<summary><b>配置</b></summary>
 
-每个插件字段按从高到低：
+配置项的读取优先级为：环境变量 > `ovcli.conf` > `ov.conf` > 内置默认值（`http://127.0.0.1:1933`，无鉴权）。
 
-1. **环境变量**（`OPENVIKING_*`）
-2. **`ovcli.conf`** — 只承载连接字段（`url`、`api_key`、`account`、`user`、`agent_id`）
-3. **`ov.conf`** — 服务端配置；插件读取 `server.url`、`server.root_api_key`，以及（旧版兼容）`claude_code` 区块（如有）
-4. **内置默认值**（`http://127.0.0.1:1933`，无鉴权）
+| 环境变量 | 默认值 | 说明 |
+|---------|--------|------|
+| `OPENVIKING_AUTO_RECALL` | `true` | 每次用户输入前自动触发记忆召回 |
+| `OPENVIKING_RECALL_LIMIT` | `10` | 遗留宽度覆盖，会转换为各分类 coding 配额 |
+| `OPENVIKING_RECALL_TOKEN_BUDGET` | `2000` | 最终 raw-find fallback 的内联 Token 预算 |
+| `OPENVIKING_AUTO_CAPTURE` | `true` | 每轮对话结束后自动捕获新记忆 |
+| `OPENVIKING_SKILL_CATALOG` | `true` | 会话启动时注入 `<available-skills>` skill 清单 |
+| `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` | `1200` | `<available-skills>` 的 Token 预算，与用户画像的预算相互独立；设为 `0` 即关闭清单 |
+| `OPENVIKING_SESSION_START_MAX_BYTES` | `9500` | SessionStart 注入的总字节上限，保证整块低于 Claude Code 的 10,000 字符限制、直接进入上下文而不是被存成文件；resume 或 compact 时会话归档最多占一半。设为 `0` 取消上限 |
+| `OPENVIKING_BYPASS_SESSION` | `false` | 禁用当前会话的所有 Hook |
+| `OPENVIKING_BYPASS_SESSION_PATTERNS` | `""` | 通过 CSV 格式的 glob 模式匹配并自动跳过特定会话 |
+| `OPENVIKING_RECALL_QUERY_FILTERS` | `""` | CSV 格式的 sed 风格正则规则，在 prompt 变成检索 query 前生效（[语法与示例](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#input-filters)） |
+| `OPENVIKING_CAPTURE_FILTERS` | `""` | CSV 格式的 sed 风格正则规则，作用于每个被捕获的回合（同一套语法） |
+| `OPENVIKING_MEMORY_ENABLED` | (auto) | 强制开启或关闭插件 |
+| `OPENVIKING_DEBUG` | `false` | 将调试日志输出至 `~/.openviking/logs/cc-hooks.log` |
 
-> ⚠️ **仅适用于 hooks。** 这条优先级链由 `scripts/config.mjs` 实现，hook 脚本消费。它**不**适用于 MCP 服务器注册——见 [为什么用 function 包装？](#为什么用-function-包装) 一节。
+这些配置大多也可以写在 `ovcli.conf` 的 `plugin` 段下——见[插件配置](../configuration/02-client.md#插件配置)。两个过滤器建议使用 JSON 数组，避免环境变量中的逗号被当作分隔符。
 
-### 主要环境变量
+如果更看重召回响应速度，请参阅[低延迟召回](./01-overview.md#低延迟召回)，其中说明了如何通过环境变量或 `ovcli.conf` 关闭查询扩展与结果压缩。
 
-| 环境变量                                          | 默认值        | 说明                                                                    |
-|--------------------------------------------------|---------------|------------------------------------------------------------------------|
-| `OPENVIKING_URL` / `OPENVIKING_BASE_URL`         | —             | 完整服务器 URL                                                          |
-| `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | —             | API Key；通过 `Authorization: Bearer <key>` 发送                         |
-| `OPENVIKING_AUTO_RECALL`                         | `true`        | 每次用户输入前是否自动召回                                                |
-| `OPENVIKING_RECALL_LIMIT`                        | `6`           | 单轮最多注入的记忆条数                                                   |
-| `OPENVIKING_RECALL_TOKEN_BUDGET`                 | `2000`        | 内联内容的 token 预算；超出预算的条目降级为 URI 提示                       |
-| `OPENVIKING_AUTO_CAPTURE`                        | `true`        | 是否自动捕获；同时控制写入类 hooks                                        |
-| `OPENVIKING_BYPASS_SESSION`                      | `false`       | 一次性开关：`1`/`true` 让当前进程跳过所有 hook                            |
-| `OPENVIKING_BYPASS_SESSION_PATTERNS`             | `""`          | CSV 形式的 glob，匹配 `session_id` 或 `cwd`                              |
-| `OPENVIKING_MEMORY_ENABLED`                      | (auto)        | `0`/`false`=强制关闭；`1`/`true`=强制开启                                |
-| `OPENVIKING_DEBUG`                               | `false`       | 把 hook 日志写到 `~/.openviking/logs/cc-hooks.log`                       |
+使用 user/admin key 时，服务端从密钥解析身份；仅在 trusted 模式下按管理员提供的信息设置 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER`。完整的环境变量列表请参阅 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration)。
 
-多租户场景下，`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_AGENT_ID` 用于设置对应的 `X-OpenViking-*` 请求头。完整环境变量列表（召回/捕获微调、生命周期、调试）见 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration)。
+</details>
 
-### 临时跳过当前 session
+## 工作区 peer
 
-在 `/tmp` 下用 Claude Code 做 PoC，不污染长期记忆：
+记忆按你所在仓库派生出的 peer 归档，因此同一个项目在不同 clone、worktree 和子目录下共用同一份记忆。默认的 `peer.source: "git"` 取仓库归一化后的 `origin` URL——`origin` 为 `git@github.com:volcengine/OpenViking.git` 时，peer 就是 `github.com-volcengine-openviking`——其次是仓库根路径；不在仓库中则完全不发送 peer，在那里记下的内容进入用户级空间 `viking://user/<you>/memories`。fork 的 `origin` 不同，因此默认是独立的 peer。
 
-```bash
-# 持久化：任何 session_id 或 cwd 命中模式的 session 都跳过
-export OPENVIKING_BYPASS_SESSION_PATTERNS='/tmp/**,**/scratch/**,/Users/me/Dev/throwaway/*'
+可通过 `OPENVIKING_PEER_SOURCE`、`ovcli.conf` 中的 `plugin.peerSource`，或工作区 `.openviking/config.json`（`"version": 1` 的配置文件，可提交给团队共用）中的 `peer.source` 修改：`"cwd"` 恢复此前的行为——把工作目录路径中的非字母数字字符全部替换成 `-`；`"none"` 表示不发送 peer；也可以用 `"team-{dir}"` 这样的模板自定义。要[让一个不是仓库的目录拥有独立记忆](../configuration/02-client.md#让一个目录拥有独立记忆)，在该目录下创建 `.openviking/config.json`，内容为 `{"version": 1, "peer": {"id": "my-project"}}`。此前按工作目录派生的 peer 下写入的记忆仍能被召回，无需迁移。分层优先级和工作区配置文件的完整 schema 见[客户端配置 → 工作区配置](../configuration/02-client.md#工作区配置)。
 
-# 或一次性：
-OPENVIKING_BYPASS_SESSION=1 claude
-```
+## 状态行
 
-bypass 启用时，所有 hook 立即返回 approve，不与 OpenViking 通信。
+插件会在 Claude Code 的输入框下方显示一行 OpenViking 状态栏，用于指示：连接状态、召回条数、捕获进度以及当前会话状态。关于状态栏各部分的详细含义与自定义配置方法，请参阅 [STATUSLINE.md](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md)。
 
-## Statusline 状态行
+## 来源卡片
 
-插件会在 Claude Code 输入框下方渲染一行 OpenViking 状态。安装脚本把它注册到 `~/.claude/settings.json`（CC 插件 manifest 不支持 `statusLine`，必须走用户 settings）。
+插件会在每次回答下方加一行卡片，列出这次回答用到的 OpenViking 来源：自动召回加进提示的内容，以及 Claude 自己搜索、读取的内容。例如 `OV · 8 sources · 4 past events · 3 work memories · 1 team doc · 1 read in full  [Expand]`。用卡片上的按钮展开单张卡片，或用 `/openviking-usage expand`、`/openviking-usage collapse` 展开或折叠全部卡片。卡片默认折叠。
 
-```text
-OV ✓ │ ↩ 6 mem (0.92) · 50ms             本轮注入 6 条记忆，最高分 0.92
-OV ⚠ slow                                 探针超过 1s 预算（服务器可能在抽风）
-OV ✗ offline                              服务器不可达
-OV ⚡ bypass                               命中 OPENVIKING_BYPASS_SESSION*
-OV ✓ │ ✎ 573/20k · 2 arch                 待提交进度 + 本 session 已归档 2 次
-OV ✓ │ 🔗 resumed │ +3 today              session 已恢复上下文；今日累计归档 3 次
-```
-
-hook 脚本把每轮的小快照写到 `~/.openviking/state/`；statusline 脚本读快照，再加 5 秒共享缓存的 `GET /health`。探针 1s 硬超时，多 session 共享缓存避免风暴。
-
-`OPENVIKING_STATUSLINE=off` 可静默不删；`jq 'del(.statusLine)' ~/.claude/settings.json` 彻底移除。已有自定义 statusline 时安装会询问替换 / 跳过 / 手动 compose。
-
-完整的段位说明（每个 segment 何时出现、为什么有时不显示）以及个性化 recipe（隐藏段位、改色、与已有 statusline 组合、自定义段位），参见 [`examples/claude-code-memory-plugin/STATUSLINE.md`](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md)。最方便的方式是打开 Claude Code 把链接喂给它，让它读完文档既能解释你看到的内容，又能按你的偏好调整。
-
-## 与 Claude Code 内置 `MEMORY.md` 的对比
-
-本插件**补充**Claude Code 原生记忆系统，不替代：
-
-| 维度          | 内置 `MEMORY.md`                  | OpenViking 插件                                     |
-|---------------|-----------------------------------|----------------------------------------------------|
-| 存储          | 平铺 markdown                      | 向量库 + 结构化抽取                                 |
-| 检索          | 整体加载到上下文                    | 语义相似度 + 排序 + token 预算                      |
-| 范围          | 单项目                              | 跨项目、跨 session、跨 agent                        |
-| 容量          | ~200 行（受上下文限制）             | 无限（服务端存储）                                   |
-| 抽取          | 手写规则                            | LLM 驱动的实体 / 偏好 / 事件抽取                     |
-| Subagents     | 与父 agent 共享                     | 隔离 session + agent 命名空间分类                    |
-
-## Hook 行为
-
-| Hook                  | 触发时机                                  | 行为                                                                                              |
-|-----------------------|-----------------------------------------|---------------------------------------------------------------------------------------------------|
-| `UserPromptSubmit`    | 每次用户输入                              | 搜索 OV → 排序 → 在 token 预算内注入 `<openviking-context>` 块                                       |
-| `Stop`                | Claude 完成一次回复                       | 解析 transcript → 把新的用户轮推入 OV session → pending tokens 超阈值时 commit                        |
-| `SessionStart`        | 新建 / 恢复 / compact 后的 session        | 每次启动（startup/clear/resume/compact）：注入用户 `profile.md` 及 `preferences/` + `entities/` 的带描述目录清单，受 `OPENVIKING_PROFILE_TOKEN_BUDGET` 限制（默认 `10000` tokens，CJK-aware；设 `OPENVIKING_NO_AUTO_INJECT=1` 可跳过）。`resume`/`compact` 场景额外拉取持久化 session 的最新归档摘要 + pre-archive abstracts。两部分合成单一 `<openviking-context>` 信封。 |
-| `PreCompact`          | Claude Code 重写 transcript 之前          | 在 CC 改写前，把待写入消息 commit 成归档                                                            |
-| `SessionEnd`          | Claude Code session 关闭                 | 最终 commit，让最后一个窗口归档                                                                      |
-| `SubagentStart`       | 父 agent 通过 Task 工具派生 subagent      | 为 subagent 派生隔离的 OV session ID，持久化启动状态                                                  |
-| `SubagentStop`        | Subagent 完成                             | 读取 subagent transcript → 推入隔离 session（带 subagent 类型的 agent 头）→ commit                     |
-
-`Stop`、`SessionEnd`、`SubagentStop` 用 detached-worker 模式，用户感知不到 OV 的 RTT。需要确定性顺序时设置 `OPENVIKING_WRITE_PATH_ASYNC=false`。
-
-`auto-capture` 在推送到 OV 前会剥离 `<openviking-context>`、`<system-reminder>`、`<relevant-memories>`、`[Subagent Context]` 等区块——否则插件本轮注入的召回上下文会作为下一轮"用户消息"被回灌进去，形成自污染。
-
-### OV session id 派生
-
-OV 端的 session id 直接包含 CC 的 `session_id`，方便肉眼对账：
-
-- 主 session：`cc-<ccSessionId>`，例如 `cc-7d978bb3-cd9c-4ac6-828d-20965d66b783`
-- subagent：`cc-<ccSessionId>__agent-<agentId>`，例如 `cc-7d978bb3-cd9c-4ac6-828d-20965d66b783__agent-abc123`
-
-可在 `~/.openviking/state/last-capture.json` 看到当前 session 的 `cc_session_id` 和 `ov_session_id` 对应关系；CC 这边的 session id 也是 `~/.claude/projects/<encoded-cwd>/<session_id>.jsonl` 的文件名。
+卡片需要 Claude Code 2.1.286 或更高版本，并启用插件 hooks 模块。版本更早或模块未启用时不显示卡片，召回、捕获等 hook 照常工作。详见插件 README 的[来源卡片](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#来源卡片)。
 
 ## 故障排查
 
-| 现象                                          | 原因                                                          | 修复                                                                                          |
-|----------------------------------------------|--------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| 插件未激活                                    | 找不到 `ov.conf` / `ovcli.conf`                              | 跑 [一行安装脚本](#一行安装推荐)，或者设 `OPENVIKING_MEMORY_ENABLED=1` + URL/API_KEY env vars |
-| Hook 触发但召回为空                           | OpenViking 服务器没起来，或 URL 不对                          | `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"`                                      |
-| MCP 工具连到 `127.0.0.1` 而不是远程            | `.mcp.json` 只支持 `${VAR}` 替换，读不到 `ovcli.conf`           | 见 [为什么用 function 包装？](#为什么用-function-包装)                                          |
-| 远程认证 401 / 403                            | API Key 错误，或多租户头缺失                                   | 检查 `OPENVIKING_API_KEY`；多租户场景还要核对 `OPENVIKING_ACCOUNT` / `OPENVIKING_USER`           |
-| `Stop` hook 超时                              | 服务器慢 + 同步写路径                                         | 保持 `OPENVIKING_WRITE_PATH_ASYNC=true`（默认），或在 `hooks/hooks.json` 提高 `Stop` 超时         |
+| 现象 | 原因 | 修复 |
+|------|------|------|
+| 插件未激活 | 未找到 `ov.conf` 或 `ovcli.conf` 配置文件 | 运行 [安装脚本](#安装)，或手动设置 `OPENVIKING_MEMORY_ENABLED=1` 配合 URL/API_KEY 使用。 |
+| Hook 已触发但召回结果为空 | 服务器未启动或 URL 配置错误 | 执行命令测试连通性：`curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
+| MCP 工具连接到了 `127.0.0.1` 而非远程服务器 | `~/.openviking/ovcli.conf` 中没有 `url`（代理回退到本地默认值） | 修正 `ovcli.conf`（或运行 `node <插件目录>/scripts/setup.mjs`）后重启 Claude Code |
+| MCP 工具调用报认证错误 | 当前 ovcli 配置没有 authenticated server 所需的有效 `api_key` | 更新 `ovcli.conf` 中的 `api_key`；stdio 代理在认证失败后会重新读取配置 |
+| 远程认证失败 (401 / 403) | 凭据无效或权限不足 | 检查当前 user/admin key 和资源权限。仅 trusted 模式需要管理员提供的 account/user Header；这些 Header 不能改变用户 Key 绑定的身份。 |
 
 ## 参见
 
-- [完整插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md) — 完整环境变量表、hook 超时、调试日志、架构图
-- [迁移说明](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/MIGRATION.md) — 从旧版插件升级
-- [MCP 集成指南](../guides/06-mcp-integration.md) — MCP 工具参数与其他客户端
-- [部署指南 → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` 配置
+- [集成能力参考](./16-capability-reference.md)
+- [博客：在 Claude Code / Codex 中接入 OpenViking](https://blog.openviking.ai/post/openviking-coding-agent/) — 探讨为 Coding Agent 添加长期记忆的动机与实际效果。
+- [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md) — 查看完整的环境变量列表、Hook 运行细节及系统架构图。
+- [MCP 客户端](./06-mcp-clients.md) — 了解 MCP 工具参数及其他客户端集成指南。
+- [部署指南 → CLI](../guides/03-deployment.md#cli) — 学习 `ovcli.conf` 的具体配置方法。

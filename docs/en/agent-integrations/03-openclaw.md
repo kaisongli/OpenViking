@@ -1,8 +1,6 @@
-# OpenClaw Plugin
+# OpenClaw
 
-Use OpenViking as the long-term memory backend for [OpenClaw](https://github.com/openclaw/openclaw). After installation, OpenClaw will automatically remember important facts from conversations and recall relevant context before replying.
-
-This plugin is registered as the `openviking` context engine — it owns long-term memory retrieval, session archiving, archive summaries, and memory extraction across the OpenClaw lifecycle.
+Add long-term memory to [OpenClaw](https://github.com/openclaw/openclaw). After installation, OpenClaw automatically remembers important facts from conversations and recalls relevant context before every reply.
 
 Source: [examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openclaw-plugin)
 
@@ -11,149 +9,182 @@ Source: [examples/openclaw-plugin](https://github.com/volcengine/OpenViking/tree
 | Component | Required Version |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.3.7 |
+| OpenClaw | >= 2026.5.27 |
 
-The plugin connects to an existing OpenViking server. Make sure you have one reachable over HTTP — see the [Deployment Guide](../guides/03-deployment.md). Quick check:
+The plugin connects to a running OpenViking server — see the [Deployment Guide](../guides/03-deployment.md) if you need one.
+
+<details>
+<summary><b>Upgrading from the legacy <code>memory-openviking</code> plugin?</b></summary>
+
+The old plugin is not compatible. Run the cleanup script first:
 
 ```bash
-node -v
-openclaw --version
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/upgrade_scripts/cleanup-memory-openviking.sh -o cleanup-memory-openviking.sh
+bash cleanup-memory-openviking.sh
 ```
 
-> **Upgrading from the legacy `memory-openviking` plugin?** It's not compatible with the new `openviking` plugin. Run the cleanup script first:
->
-> ```bash
-> curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/upgrade_scripts/cleanup-memory-openviking.sh -o cleanup-memory-openviking.sh
-> bash cleanup-memory-openviking.sh
-> ```
+</details>
 
-## Install via ClawHub (recommended)
+## Install
 
 ```bash
 openclaw plugins install clawhub:@openviking/openclaw-plugin
-```
-
-Then run the interactive setup wizard:
-
-```bash
-openclaw openviking setup
-```
-
-The wizard prompts for your remote OpenViking server URL and optional API key, then writes configuration to `$OPENCLAW_STATE_DIR/openclaw.json` (default: `~/.openclaw/openclaw.json`).
-
-Restart the gateway:
-
-```bash
+openclaw openviking setup --base-url https://openviking.example.com --api-key sk-xxx --json
 openclaw gateway restart
 ```
 
-## Install via `ov-install` (alternative)
+The `setup` wizard writes configuration and activates the plugin. After install, start a conversation — OpenClaw will begin remembering and recalling automatically.
 
-The `ov-install` helper automates plugin deployment:
+<details>
+<summary><b>Alternative: install via <code>ov-install</code></b></summary>
+
+If ClawHub is unavailable:
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
-ov-install
+ov-install --base-url https://openviking.example.com
 ```
 
-Common variants:
+Key parameters:
+
+| Parameter | Meaning |
+| --- | --- |
+| `--workdir PATH` | OpenClaw data directory (default `~/.openclaw`) |
+| `--plugin-version=VER` | Plugin version: npm version, dist-tag, or Git ref |
+| `--base-url URL` | OpenViking server URL |
+| `--api-key KEY` | OpenViking API key |
+| `--peer-role ROLE` | Memory scope: `none`, `assistant`, or `sender` |
+| `--uninstall` | Uninstall the plugin |
+
+Full parameter list in the [install guide](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL.md).
+
+</details>
+
+## Choose the Memory Scope
+
+`peer_role` decides whether long-term memory is shared at the OpenViking user level or attributed to a concrete peer:
+
+| Value | Memory layout | Use case |
+| --- | --- | --- |
+| `none` (default) | Shared memory at `viking://user/<user_id>/memories/...`; no peer-specific memory subtree is used | General-purpose setup where all conversations for this OpenViking user share user-level memory |
+| `assistant` | Assistant-attributed peer memory at `viking://user/<user_id>/peers/<assistant_id>/memories/...` | **Human as OpenViking user**: separate the peer memories of assistants such as `main` and `research` |
+| `sender` | Sender-attributed peer memory at `viking://user/<user_id>/peers/<sender_id>/memories/...` | **Agent as OpenViking user**: separate the peer memories of senders such as `customer-42` and `customer-99` |
+
+For example:
 
 ```bash
-# Target a specific OpenClaw data directory
-ov-install --workdir ~/.openclaw-second
+# Alice is the OpenViking user; separate memories by OpenClaw assistant.
+openclaw openviking setup --base-url https://openviking.example.com --api-key sk-xxx --peer-role assistant --json
 
-# Pin to a specific plugin release
-ov-install -y --version 0.2.9
+# support-agent is the OpenViking user; separate memories by human sender.
+openclaw openviking setup --base-url https://openviking.example.com --api-key sk-xxx --peer-role sender --json
 ```
 
-To upgrade later:
+Setup and the installer accept only `sender`; existing `peer_role=person` configurations remain compatible and are treated as `sender`. OpenViking initializes the managed `peers/` container for every user, so `none` means that no concrete `peers/<peer_id>/memories` subtree is used. Actor-peer recall includes shared user memory plus the current peer memory, and changing the scope does not move existing memories.
 
-```bash
-npm install -g openclaw-openviking-setup-helper@latest && ov-install -y
+## How assemble builds context
+
+The plugin occupies OpenClaw's `contextEngine` slot. It handles session history, long-term memory recall, and the pending user input separately; `assemble()` returns context for the current model request. It does not persist assembled summaries or recalled context to the OpenClaw session transcript, nor does it append messages to the OV session through this call. The host may update the current turn's in-memory messages with the result; that is separate from writing persistent conversation history.
+
+Main assemble prepares history at the start of each new turn. The plugin identifies this call by the presence of at least one of `prompt`, `availableTools`, or `citationsMode`.
+
+### Main assemble: history and pending input
+
+The main branch calls `getSessionContext(tokenBudget)` and builds:
+
+```text
+summaryMessage = { role: "user", content: "[Session History Summary]\n" + latest_archive_overview }
+messages = [summaryMessage] + OV active messages
+systemPromptAddition = Session Context Guide (when archives exist) + user profile (when profile.md exists) + recalled context (when available)
 ```
 
-### `ov-install` parameters
+`latest_archive_overview` is the summary text returned by the server; `[Session History Summary]` is the literal heading prepended by the plugin. This synthetic user message is inserted only when the overview is nonempty. Active messages provide recent uncompressed conversation. The host adds the pending `prompt` to the turn. The plugin uses it for recall without appending a second copy to the returned history. Recalled context belongs to this request and is not directly captured as new conversation in OV.
 
-| Parameter                  | Meaning                                                            |
-| -------------------------- | ------------------------------------------------------------------ |
-| `--workdir PATH`           | Target OpenClaw data directory                                     |
-| `--version VER`            | Set plugin version (e.g. `0.2.9` → plugin `v0.2.9`)                |
-| `--current-version`        | Print the currently installed plugin version                       |
-| `--plugin-version REF`     | Set plugin version — auto-detected: npm version (e.g. `2026.5.8`) or npm dist-tag (e.g. `dev`) resolves via npm; other refs (e.g. `v0.3.16`, `main`) resolve via the GitHub repo; default `npm latest` |
-| `--plugin-source=npm\|github` | Plugin download source (default `npm`)                            |
-| `--plugin-package=NAME`    | npm plugin package name (default `@openviking/openclaw-plugin`)    |
-| `--github-repo owner/repo` | Use a different GitHub repo for plugin files (default `volcengine/OpenViking`) |
-| `--update`                 | Upgrade only the plugin                                            |
-| `-y`                       | Non-interactive mode, use default values                           |
+OV generates the overview through its server-side working-memory flow; the plugin reads the result. The server budgets active messages first and omits the overview if the remaining space is insufficient. `pre_archive_abstracts` is currently an empty array, so the response is not a complete archive index. Use `ov_archive_search` for original details.
 
-## Plugin configuration
+The plugin reserves output headroom, subtracts estimated guide and summary tokens, trims active messages from the oldest end, and normalizes provider message formats such as tool calls and results. It does not hard-truncate the summary to the calculated archive budget, so the partitions are not strict per-layer limits. A new recall block is omitted if it would push the total estimate above `tokenBudget`.
 
-The plugin configuration lives under `plugins.entries.openviking.config`. Setup usually writes this for you — manual edits are only needed if you change servers later.
+The history branch falls back to host messages when OV has no data, has fewer messages than the host without an archive, produces an empty converted history, or fails to load. Main-branch recall can still run with a valid `prompt` and `autoRecall` enabled even when history passes through. Missing recall results or recall failures do not stop the conversation.
 
-```bash
-openclaw config get plugins.entries.openviking.config
+### transformContext
+
+`transformContext` runs before each LLM call, whether the last message is a user message or a tool response. The best use of this hook in the OV integration has not yet been determined.
+
+### Capture and compaction
+
+- `ingest()` / `ingestBatch()` do not write messages. Regular capture uses `afterTurn`. For stable OpenClaw versions from 2026.9.3 onward, the plugin also captures completed turns delivered through `commitTurn`; older hosts and standalone runners use `afterTurn`. If the host version cannot be classified, `commitTurn` rejects acknowledgement to avoid confirming uncaptured data.
+- Capture removes injected context, converts text and tool messages, and writes them to the OV session. When `pending_tokens >= tokenBudget × commitTokenThresholdRatio`, it starts an asynchronous session commit. The default ratio is `0.5`; retention defaults to the most recent `10` messages, with `turn_budget` available as another policy. `pending_tokens` counts messages eligible for archiving under the server retention policy, not the entire model request.
+- `ownsCompaction: true` assigns compaction to the plugin. Normal `compact()` commits the OV session with `wait=true` and retention `0`, then reads the overview as its summary. The next main assemble rebuilds history from that summary and active messages. Bypassed sessions attempt to delegate compaction to the host; if the host bridge is unavailable, the plugin returns a skip result.
+
+A **session commit** archives conversation and processes memory. It is separate from a [snapshot commit](../guides/15-snapshot.md), which versions resource files.
+
+## Agent experience recall configuration
+
+The plugin still accepts `agentExperience` in its plugin configuration with these defaults:
+
+```json
+{
+  "agentExperience": {
+    "enabled": false,
+    "recallLimit": 3,
+    "scoreThreshold": 0.35,
+    "maxInjectedChars": 6000,
+    "minQueryChars": 12
+  }
+}
 ```
 
-| Parameter      | Default                  | Meaning                                                  |
-| -------------- | ------------------------ | -------------------------------------------------------- |
-| `baseUrl`      | `http://127.0.0.1:1933`  | Remote OpenViking HTTP endpoint                          |
-| `apiKey`       | empty                    | Optional OpenViking API key                              |
-| `agent_prefix` | `default`                | Agent prefix used by this OpenClaw instance on the server |
+These fields remain in the configuration schema, but the current assemble path does not consume them. Recall uses the shared `searchContext` path and the general `autoRecall`, `recallLimit`, `recallScoreThreshold`, and `recallMaxInjectedChars` settings. Setting `agentExperience.enabled` does not enable a separate experience search or a separate experience section.
 
-Common settings:
-
-```bash
-openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
-openclaw config set plugins.entries.openviking.config.apiKey your-api-key
-openclaw config set plugins.entries.openviking.config.agent_prefix your-prefix
-```
+The retained `shouldRecallAgentExperience` helper scores execution, write, failure, and engineering terms, plus intent words such as “经验”, “踩坑”, “best practice”, and “pitfall”. It has no caller in the current recall path. Its keyword rules and `minQueryChars` must not be treated as active recall controls. Injected context uses `<openviking-context>`; capture strips that wrapper and its content before saving user text, so recalled material is not captured again as user input.
 
 ## Verify
-
-For a one-shot health check covering plugin registration, server connectivity, and version compatibility, run:
 
 ```bash
 openclaw openviking status
 ```
 
-For automation, append `--json` to `openclaw openviking status` to get a machine-readable result. `openclaw openviking setup` also supports `--json` when used with `--base-url`.
+This checks plugin registration, server connectivity, and version compatibility in one command. Append `--json` for machine-readable output.
 
-Or check the underlying signals manually. The plugin owns the `contextEngine` slot:
+<details>
+<summary><b>Manual verification</b></summary>
+
+Check the plugin owns the `contextEngine` slot:
 
 ```bash
 openclaw config get plugins.slots.contextEngine
+# expect: openviking
 ```
 
-If the output is `openviking`, the plugin is active.
-
-Follow OpenClaw logs for the registration message:
-
-```bash
-openclaw logs --follow
-# expect: openviking: registered context-engine
-```
-
-OpenViking server log (default location):
-
-```bash
-cat ~/.openviking/data/log/openviking.log
-```
-
-Currently-installed plugin version:
-
-```bash
-ov-install --current-version
-```
-
-### Pipeline health check (optional)
-
-For an end-to-end sanity check (Gateway → OpenViking pipeline), run:
+From the OpenViking checkout, run the end-to-end test below after enabling the Gateway `/v1/responses` endpoint described in HEALTHCHECK.md. It sends real model requests and writes test conversations:
 
 ```bash
 python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
 ```
 
-This script injects a real conversation through Gateway and verifies from the OpenViking side that the session was captured, committed, archived, and had memories extracted. See [HEALTHCHECK.md](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/health_check_tools/HEALTHCHECK.md) for details.
+See [HEALTHCHECK.md](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/health_check_tools/HEALTHCHECK.md) for details.
+
+</details>
+
+<details>
+<summary><b>Configuration</b></summary>
+
+Plugin config lives under `plugins.entries.openviking.config`. Setup usually writes this for you.
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `baseUrl` | `http://127.0.0.1:1933` | OpenViking server endpoint |
+| `apiKey` | empty | OpenViking API key |
+| `peer_role` | `none` | `none`, `assistant`, or `sender`; legacy `person` is accepted as `sender` |
+| `peer_prefix` | empty | Optional prefix for assistant peer identity when `peer_role=assistant` |
+| `autoRecallTimeoutMs` | `5000` | Outer timeout (ms) for the whole auto-recall flow; increase for slow local embedding hardware (clamped 1000–300000) |
+
+```bash
+openclaw config set plugins.entries.openviking.config.baseUrl https://openviking.example.com
+openclaw config set plugins.entries.openviking.config.apiKey your-api-key
+```
+
+</details>
 
 ## Uninstall
 
@@ -162,10 +193,9 @@ curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples
 bash uninstall-openviking.sh
 ```
 
-For a non-default OpenClaw state directory, append `--workdir ~/.openclaw-second`.
-
 ## See also
 
-- [Full install guide](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL.md) — every install path, parameter, and verification step
+- [Capability Reference](./16-capability-reference.md)
+- [Full install guide](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL.md) — every install path and parameter
 - [Plugin design notes](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/README.md) — architecture, identity & routing, hook lifecycle
 - [Agent operator guide](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL-AGENT.md) — for agents driving installation on behalf of a user

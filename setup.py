@@ -8,8 +8,10 @@ import sys
 import sysconfig
 from pathlib import Path
 
-from setuptools import Extension, setup
+from setuptools import Distribution, Extension, setup
 from setuptools.command.build_ext import build_ext
+from setuptools.command.build_py import build_py
+from setuptools.command.sdist import sdist
 
 try:
     from wheel.bdist_wheel import bdist_wheel
@@ -21,17 +23,24 @@ if str(SETUP_DIR) not in sys.path:
     sys.path.insert(0, str(SETUP_DIR))
 
 get_host_engine_build_config = importlib.import_module(
-    "build_support.x86_profiles"
+    "scripts.build_support.x86_profiles"
 ).get_host_engine_build_config
 resolve_openviking_version = importlib.import_module(
-    "build_support.versioning"
+    "scripts.build_support.versioning"
 ).resolve_openviking_version
+pypi_long_description = importlib.import_module(
+    "scripts.build_support.readme"
+).pypi_long_description
+write_system_assets_manifest = importlib.import_module(
+    "scripts.build_support.system_assets_manifest"
+).write_system_assets_manifest
 
 CMAKE_PATH = shutil.which("cmake") or "cmake"
 C_COMPILER_PATH = os.environ.get("CC") or shutil.which("gcc") or "gcc"
 CXX_COMPILER_PATH = os.environ.get("CXX") or shutil.which("g++") or "g++"
 ENGINE_SOURCE_DIR = "src/"
 ENGINE_BUILD_CONFIG = get_host_engine_build_config(platform.machine())
+SKIP_CPP_BUILD = os.environ.get("OV_SKIP_CPP_BUILD") == "1"
 
 
 def _sanitize_native_build_env(env):
@@ -110,8 +119,11 @@ class OpenVikingBuildExt(build_ext):
         self.build_ragfs_python_artifact()
         self.cmake_executable = CMAKE_PATH
 
-        for ext in self.extensions:
-            self.build_extension(ext)
+        if SKIP_CPP_BUILD:
+            print("[SKIP] C++ vector engine build disabled by OV_SKIP_CPP_BUILD=1")
+        else:
+            for ext in self.extensions:
+                self.build_extension(ext)
 
     def _copy_artifact(self, src, dst):
         """Copy a build artifact into the package tree and preserve executability."""
@@ -174,6 +186,10 @@ class OpenVikingBuildExt(build_ext):
 
     def build_ov_cli_artifact(self):
         """Build or reuse the ov Rust CLI binary."""
+        if os.environ.get("OV_SKIP_OV_BUILD") == "1":
+            print("[SKIP] ov CLI build disabled by OV_SKIP_OV_BUILD=1")
+            return
+
         binary_name = "ov.exe" if sys.platform == "win32" else "ov"
         ov_cli_dir = Path("crates/ov_cli").resolve()
         ov_target_binary = Path("openviking/bin").resolve() / binary_name
@@ -194,12 +210,6 @@ class OpenVikingBuildExt(build_ext):
             if src_bin.exists():
                 self._copy_artifact(src_bin, ov_target_binary)
                 return
-
-        if os.environ.get("OV_SKIP_OV_BUILD") == "1":
-            if ov_target_binary.exists():
-                print("[OK] Skipping ov CLI build, using existing binary")
-                return
-            print("[Warning] OV_SKIP_OV_BUILD=1 but binary is missing. Will try to build.")
 
         if ov_cli_dir.exists() and shutil.which("cargo"):
             print("Building ov CLI from source...")
@@ -344,12 +354,9 @@ class OpenVikingBuildExt(build_ext):
                 with zipfile.ZipFile(str(whl_files[0])) as zf:
                     for name in zf.namelist():
                         basename = Path(name).name
-                        is_ragfs_extension = (
-                            basename == "ragfs_python.pyd"
-                            or (
-                                basename.startswith("ragfs_python.abi3.")
-                                and basename.endswith((".so", ".pyd"))
-                            )
+                        is_ragfs_extension = basename == "ragfs_python.pyd" or (
+                            basename.startswith("ragfs_python.abi3.")
+                            and basename.endswith((".so", ".pyd"))
                         )
                         if is_ragfs_extension:
                             target_path = ragfs_lib_dir / basename
@@ -362,7 +369,9 @@ class OpenVikingBuildExt(build_ext):
                             break
 
                 if not extracted:
-                    message = "Could not find ragfs_python stable-ABI native extension in built wheel."
+                    message = (
+                        "Could not find ragfs_python stable-ABI native extension in built wheel."
+                    )
                     if require_ragfs_artifact:
                         raise RuntimeError(message)
                     print(f"[Warning] {message}")
@@ -444,6 +453,11 @@ class OpenVikingBuildExt(build_ext):
             f"-DCMAKE_CXX_COMPILER={CXX_COMPILER_PATH}",
         ]
 
+        for language in ("C", "CXX"):
+            launcher = os.environ.get(f"CMAKE_{language}_COMPILER_LAUNCHER")
+            if launcher:
+                cmake_args.append(f"-DCMAKE_{language}_COMPILER_LAUNCHER={launcher}")
+
         if sys.platform == "darwin":
             cmake_args.append("-DCMAKE_OSX_DEPLOYMENT_TARGET=10.15")
             target_arch = os.environ.get("CMAKE_OSX_ARCHITECTURES")
@@ -460,6 +474,80 @@ class OpenVikingBuildExt(build_ext):
         self.spawn([self.cmake_executable] + build_args)
 
 
+def _build_web_studio():
+    """Build the web-studio SPA and copy dist into the Python package tree.
+
+    Skipped when OV_SKIP_STUDIO_BUILD=1 or when the bundle already exists.
+    Falls back gracefully (warning, not error) when npm is unavailable.
+    """
+    if os.environ.get("OV_SKIP_STUDIO_BUILD") == "1":
+        print("  [SKIP] web-studio build disabled by OV_SKIP_STUDIO_BUILD=1")
+        return
+
+    dest = SETUP_DIR / "openviking" / "web_studio" / "dist"
+    if (dest / "index.html").is_file():
+        print("  [OK] web-studio bundle already present")
+        return
+
+    source = SETUP_DIR / "web-studio"
+    if not (source / "package.json").is_file():
+        print("  [SKIP] web-studio source not found; /studio will be unavailable")
+        return
+
+    npm = shutil.which("npm")
+    if not npm:
+        print("  [SKIP] npm not found; install Node.js to enable /studio")
+        return
+
+    print("Building web-studio (Vite SPA)...")
+    try:
+        subprocess.check_call([npm, "ci"], cwd=str(source))
+        subprocess.check_call(
+            [npm, "run", "build", "--", "--base=/studio/"],
+            cwd=str(source),
+        )
+    except subprocess.CalledProcessError as exc:
+        print(f"  [WARNING] web-studio npm build failed ({exc}); /studio will be unavailable")
+        return
+
+    built = source / "dist"
+    if not (built / "index.html").is_file():
+        print("  [WARNING] web-studio build produced no index.html; /studio will be unavailable")
+        return
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(built, dest)
+    print(f"  [OK] web-studio bundle copied to {dest}")
+
+
+class OpenVikingBuildPy(build_py):
+    def run(self):
+        _build_web_studio()
+        write_system_assets_manifest(SETUP_DIR / "openviking" / "system_assets")
+        super().run()
+        package_root = Path(self.build_lib) / "vikingbot"
+        for asset_name in ("workspace", "bridge"):
+            source = SETUP_DIR / "bot" / asset_name
+            if not source.is_dir():
+                raise FileNotFoundError(f"required VikingBot asset directory not found: {source}")
+            destination = package_root / asset_name
+            if destination.exists():
+                shutil.rmtree(destination)
+            shutil.copytree(
+                source,
+                destination,
+                ignore=shutil.ignore_patterns("node_modules", "dist", "__pycache__", "*.pyc"),
+            )
+
+
+class OpenVikingSdist(sdist):
+    def make_release_tree(self, base_dir, files):
+        super().make_release_tree(base_dir, files)
+        write_system_assets_manifest(Path(base_dir) / "openviking" / "system_assets")
+
+
 if bdist_wheel is not None:
 
     class OpenVikingBdistWheel(bdist_wheel):
@@ -470,31 +558,58 @@ else:
     OpenVikingBdistWheel = None
 
 
+class OpenVikingDistribution(Distribution):
+    """Keep wheels platform-specific because ragfs-python is a native artifact."""
+
+    def has_ext_modules(self):
+        return True
+
+
 cmdclass = {
     "build_ext": OpenVikingBuildExt,
+    "build_py": OpenVikingBuildPy,
+    "sdist": OpenVikingSdist,
 }
 if OpenVikingBdistWheel is not None:
     cmdclass["bdist_wheel"] = OpenVikingBdistWheel
 
 
 setup(
-    ext_modules=[
-        Extension(
-            name=ENGINE_BUILD_CONFIG.primary_extension,
-            sources=[],
-            py_limited_api=True,
-        )
-    ],
+    distclass=OpenVikingDistribution,
+    long_description=pypi_long_description(SETUP_DIR / "README.md"),
+    long_description_content_type="text/markdown",
+    ext_modules=(
+        []
+        if SKIP_CPP_BUILD
+        else [
+            Extension(
+                name=ENGINE_BUILD_CONFIG.primary_extension,
+                sources=[],
+                py_limited_api=True,
+            )
+        ]
+    ),
     cmdclass=cmdclass,
     package_data={
+        "openviking_gateway": ["client-rules.json"],
+        "openviking.scheduling.expiry": ["lua/*.lua"],
         "openviking": [
             "lib/ragfs_python*.so",
             "lib/ragfs_python*.pyd",
             "bin/ov",
             "bin/ov.exe",
-            "console/static/**/*",
+            "server/account_stores/sql/*.sql",
+            "server/account_stores/sql/changes/*.sql",
+            "service/sql/*.sql",
+            "service/sql/changes/*.sql",
+            "server/static/**/*",
+            "web_studio/dist/**/*",
             "storage/vectordb/engine/*.abi3.so",
             "storage/vectordb/engine/*.pyd",
+        ],
+        "vikingbot": [
+            "workspace/**/*",
+            "bridge/**/*",
         ],
     },
     include_package_data=True,

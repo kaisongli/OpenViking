@@ -12,6 +12,7 @@ export const MEMORY_TRIGGERS = [
 
 const CJK_CHAR_REGEX = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
 const RELEVANT_MEMORIES_BLOCK_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>/gi;
+const OPENVIKING_CONTEXT_BLOCK_RE = /<openviking-context\b[^>]*>[\s\S]*?<\/openviking-context>/gi;
 const CONVERSATION_METADATA_BLOCK_RE =
   /(?:^|\n)\s*(?:Conversation info|Conversation metadata|会话信息|对话信息)\s*(?:\([^)]+\))?\s*:\s*```[\s\S]*?```/gi;
 /** Strips "Sender (untrusted metadata): ```json ... ```" so capture sends clean text to OpenViking extract. */
@@ -43,11 +44,11 @@ function looksLikeMetadataJsonBlock(content: string): boolean {
   return matchedKeys.size >= 3;
 }
 
-const HEARTBEAT_RE = /\bHEARTBEAT(?:\.md|_OK)\b/;
+const TOOL_PLACEHOLDER_RE = /^\s*\[tool(?::\s*|Use:\s*)[^\]]+\]\s*$/i;
 
 export function sanitizeUserTextForCapture(text: string): string {
-  // 过滤 HEARTBEAT 健康检查消息
-  if (HEARTBEAT_RE.test(text)) {
+  // Drop legacy synthetic tool placeholders before they reach memory extraction.
+  if (TOOL_PLACEHOLDER_RE.test(text)) {
     return "";
   }
   // 处理 Compactor 系统消息，提取实际用户输入
@@ -60,6 +61,7 @@ export function sanitizeUserTextForCapture(text: string): string {
     return "";
   }
   return text
+    .replace(OPENVIKING_CONTEXT_BLOCK_RE, " ")
     .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
     .replace(CONVERSATION_METADATA_BLOCK_RE, " ")
     .replace(SENDER_METADATA_BLOCK_RE, " ")
@@ -69,6 +71,14 @@ export function sanitizeUserTextForCapture(text: string): string {
     .replace(LEADING_TIMESTAMP_PREFIX_RE, "")
     .replace(SUBAGENT_CONTEXT_RE, "")
     .replace(/\u0000/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function stripOpenVikingContextInjection(text: string): string {
+  return text
+    .replace(OPENVIKING_CONTEXT_BLOCK_RE, " ")
+    .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -394,14 +404,14 @@ export function extractNewTurnMessages(
           : undefined);
       if (output) {
         result.push({
-          role: "user",
+          role: "assistant",
           parts: [{
             type: "tool",
             toolCallId: toolCallId || undefined,
             toolName,
             toolInput,
             toolOutput: output,
-            toolStatus: "completed",
+            toolStatus: msg.isError === true ? "error" : "completed",
           }],
         });
       }

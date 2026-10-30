@@ -12,8 +12,9 @@ strings keyed by their SHA-256 hash, so this module contains no cryptography.
 
 from __future__ import annotations
 
+import inspect
 import secrets
-from typing import Callable, Optional
+from typing import Awaitable, Callable, Optional
 from urllib.parse import urlencode
 
 from mcp.server.auth.provider import (
@@ -33,10 +34,6 @@ from openviking.server.oauth.otp import generate_otp
 from openviking.server.oauth.storage import OAuthStore
 from openviking_cli.utils import get_logger
 
-# Mirrors auth.py:_ROLE_RANK; duplicated here to avoid the import cycle
-# (auth.py already depends on this module via the Provider Protocol).
-_ROLE_RANK = {Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
-
 logger = get_logger(__name__)
 
 # Access tokens carry this prefix so the auth.py bearer router can cheaply
@@ -45,6 +42,20 @@ logger = get_logger(__name__)
 ACCESS_TOKEN_PREFIX = "ovat_"
 REFRESH_TOKEN_PREFIX = "ovrt_"
 AUTH_CODE_PREFIX = "ovac_"
+
+# The only scope OpenViking defines. Single source for the three places that
+# must agree on it: the RFC 9728 PRM document (router.py), the DCR default
+# (app.py ClientRegistrationOptions), and the missing-scope fallback below.
+MCP_SCOPE = "mcp"
+
+# Primary authorize page: a /studio SPA route that runs in the same tab as
+# the user's Studio session, so it can read the session-stored API key.
+DEFAULT_AUTHORIZE_PAGE = "/studio/oauth/consent"
+# Server-rendered fallback used when the user can't open /studio on the
+# current device (e.g. CLI MCP clients). The HTML page shows the
+# 6-character display_code and points the user at /studio/oauth/verify on
+# another already-signed-in device.
+FALLBACK_AUTHORIZE_PAGE = "/oauth/authorize/page"
 
 
 class OVAuthorizationCode(AuthorizationCode):
@@ -86,8 +97,8 @@ class OpenVikingOAuthProvider(
         access_token_ttl_seconds: int = 3600,
         refresh_token_ttl_seconds: int = 30 * 24 * 3600,
         auth_code_ttl_seconds: int = 300,
-        authorize_page_path: str = "/oauth/authorize/page",
-        role_resolver: Optional[Callable[[str, str], "Role"]] = None,
+        authorize_page_path: str = DEFAULT_AUTHORIZE_PAGE,
+        role_resolver: Optional[Callable[[str, str], Role | None | Awaitable[Role | None]]] = None,
     ) -> None:
         self._store = store
         self._issuer = issuer.rstrip("/")
@@ -95,11 +106,8 @@ class OpenVikingOAuthProvider(
         self._refresh_ttl = refresh_token_ttl_seconds
         self._code_ttl = auth_code_ttl_seconds
         self._authorize_page = authorize_page_path
-        # Optional callback to look up a user's current role at refresh time.
-        # When supplied, exchange_refresh_token will reject if the embedded
-        # role outranks the current role — mirrors the bearer-auth check so
-        # that `set_role` demotion can't be laundered through token rotation.
-        # Wired in app.py from the APIKeyManager.
+        # Optional account-registry lookup used to validate the saved
+        # authorization role at refresh time, matching bearer authentication.
         self._role_resolver = role_resolver
 
     # ---- Clients (DCR) ----
@@ -115,6 +123,13 @@ class OpenVikingOAuthProvider(
             token_endpoint_auth_method=record["token_endpoint_auth_method"],
             grant_types=record["grant_types"],
             response_types=record["response_types"],
+            # Clients registered without a scope (ChatGPT's DCR omits the
+            # field; rows predating #2921's scope column are NULL) would fail
+            # /authorize with invalid_scope as soon as they request the "mcp"
+            # scope our PRM document advertises — the SDK's validate_scope
+            # treats a scope-less client as "nothing authorized". Fall back to
+            # the default grant instead.
+            scope=record.get("scope") or MCP_SCOPE,
             client_name=record.get("client_name"),
             client_id_issued_at=record["created_at"],
         )
@@ -156,6 +171,7 @@ class OpenVikingOAuthProvider(
                 if client_info.response_types
                 else None,
                 client_secret=None,  # public client; never stored
+                scope=client_info.scope,
             )
         except ValueError as exc:
             raise RegistrationError(
@@ -169,12 +185,15 @@ class OpenVikingOAuthProvider(
     ) -> str:
         """Mint a verification code and stash the AuthorizationParams.
 
-        Returns the URL of our authorize page, which displays a 6-character
-        verification code. The user re-types that code into the OpenViking
-        console (where they're already authenticated), the console calls our
-        ``/api/v1/auth/oauth-verify`` endpoint to bind the caller's identity
-        to the pending row, and the page polls until verified to redirect
-        back to the client's redirect_uri.
+        Returns the URL of the configured authorize page. By default this is
+        ``/studio/oauth/consent``, a SPA route inside OpenViking Studio that
+        renders a consent card using the Studio user's existing session and
+        calls ``/api/v1/auth/oauth-verify`` directly. For CLI / cross-device
+        flows the user can switch to ``/oauth/authorize/page`` (the
+        server-rendered fallback) which displays a 6-character display_code
+        and asks the user to enter it on another device's Studio at
+        ``/studio/oauth/verify``. Either path polls until verified and then
+        redirects back to the client's ``redirect_uri``.
         """
         assert client.client_id is not None
         display_code = generate_otp()
@@ -265,23 +284,21 @@ class OpenVikingOAuthProvider(
         refresh_token: OVRefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
-        # Role downgrade gate: if the embedded role outranks the user's
-        # current role (post-`set_role` demotion), refuse to rotate. Same
-        # invariant the bearer-auth path enforces; checked here so a
-        # demoted user can't keep minting fresh access tokens at the old
-        # privilege level just because they hold a long-lived refresh.
+        # Validate the saved authorization role without replacing it with
+        # the account-registry role. Registry reads may be cached.
         if self._role_resolver is not None:
             try:
-                token_role = Role(refresh_token.role)
-                current_role = self._role_resolver(refresh_token.account_id, refresh_token.user_id)
-            except (ValueError, Exception):  # noqa: BLE001
-                token_role = None
-                current_role = None
-            if (
-                token_role is not None
-                and current_role is not None
-                and _ROLE_RANK[token_role] > _ROLE_RANK[current_role]
-            ):
+                authorized_account_role = Role.parse(refresh_token.role)
+                resolved = self._role_resolver(refresh_token.account_id, refresh_token.user_id)
+                registered_account_role = Role.parse(
+                    await resolved if inspect.isawaitable(resolved) else resolved
+                )
+            except Exception as exc:
+                raise TokenError(
+                    error="invalid_grant",
+                    error_description="Unable to validate current identity; re-authorize the client",
+                ) from exc
+            if not registered_account_role.allows_token_role(authorized_account_role):
                 raise TokenError(
                     error="invalid_grant",
                     error_description=(
@@ -307,7 +324,7 @@ class OpenVikingOAuthProvider(
                     refresh_token.account_id,
                     refresh_token.user_id,
                 )
-                await self._store.revoke_user_tokens(
+                await self._store.revoke_tokens(
                     account_id=refresh_token.account_id,
                     user_id=refresh_token.user_id,
                 )

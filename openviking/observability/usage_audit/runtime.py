@@ -24,6 +24,7 @@ from .worker import UsageAuditWorker
 logger = logging.getLogger(__name__)
 
 _SUBSCRIBER_NAME = "usage_audit"
+_DEFAULT_SQLITE_RELATIVE_PATH = Path("_system") / "usage_audit" / "usage_audit.sqlite3"
 
 
 @dataclass(slots=True)
@@ -35,6 +36,11 @@ class UsageAuditRuntime:
     api_service: UsageAuditQueryService
     shutdown_flush_timeout_seconds: float
 
+    async def delete_data(self, *, account_id: str, user_id: str | None = None) -> dict[str, int]:
+        """Drain accepted events before purging one account/user scope's projections."""
+        await self.worker.flush()
+        return await self.store.delete_data(account_id=account_id, user_id=user_id)
+
 
 def _resolve_sqlite_path(config: ServerConfig) -> Path:
     configured = config.observability.usage_audit.sqlite_path
@@ -45,7 +51,7 @@ def _resolve_sqlite_path(config: ServerConfig) -> Path:
         workspace = Path(ov_config.storage.workspace).expanduser().resolve()
     except Exception:  # noqa: BLE001
         workspace = DEFAULT_CONFIG_DIR
-    return workspace / "usage_audit.sqlite3"
+    return workspace / _DEFAULT_SQLITE_RELATIVE_PATH
 
 
 async def init_usage_audit_from_server_config(
@@ -68,7 +74,6 @@ async def init_usage_audit_from_server_config(
         usage_retention_days=usage_config.usage_retention_days,
         audit_retention_days=usage_config.audit_retention_days,
         audit_retention_per_account=usage_config.audit_retention_per_account,
-        timezone_name=usage_config.timezone,
     )
     await store.initialize()
 

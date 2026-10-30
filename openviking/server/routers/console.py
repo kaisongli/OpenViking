@@ -47,22 +47,30 @@ def _disabled_response():
 @router.get("/dashboard/summary")
 async def dashboard_summary(
     request: Request,
-    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+    timezone: Optional[str] = Query(
+        None,
+        description="IANA viewer timezone (e.g. Asia/Shanghai). Defaults to server tz.",
+    ),
+    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Return Dashboard top-card data."""
     service = _runtime_service(request)
     if service is None:
         return _disabled_response()
-    return _ok_response(await service.dashboard_summary(_ctx))
+    return _ok_response(await service.dashboard_summary(_ctx, timezone_name=timezone))
 
 
 @router.get("/tokens")
 async def token_series(
     request: Request,
-    start_date: str = Query(..., description="Start date in YYYY-MM-DD format"),
-    end_date: str = Query(..., description="End date in YYYY-MM-DD format"),
+    start_date: str = Query(..., description="Start date (viewer-local) in YYYY-MM-DD"),
+    end_date: str = Query(..., description="End date (viewer-local) in YYYY-MM-DD"),
     bucket: str = Query("day", pattern="^(day)$"),
-    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+    timezone: Optional[str] = Query(
+        None,
+        description="IANA viewer timezone (e.g. Asia/Shanghai). Defaults to server tz.",
+    ),
+    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Return token usage trend for a date range."""
     service = _runtime_service(request)
@@ -73,6 +81,7 @@ async def token_series(
         start_date=start_date,
         end_date=end_date,
         bucket=bucket,
+        timezone_name=timezone,
     )
     return _ok_response(result)
 
@@ -80,10 +89,14 @@ async def token_series(
 @router.get("/context-commits")
 async def context_commits(
     request: Request,
-    start_date: str = Query(..., description="Start date in YYYY-MM-DD format"),
-    end_date: str = Query(..., description="End date in YYYY-MM-DD format"),
+    start_date: str = Query(..., description="Start date (viewer-local) in YYYY-MM-DD"),
+    end_date: str = Query(..., description="End date (viewer-local) in YYYY-MM-DD"),
     bucket: str = Query("hour", pattern="^(hour|4h)$"),
-    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+    timezone: Optional[str] = Query(
+        None,
+        description="IANA viewer timezone (e.g. Asia/Shanghai). Defaults to server tz.",
+    ),
+    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Return context write heatmap rows for a date range."""
     service = _runtime_service(request)
@@ -94,6 +107,7 @@ async def context_commits(
         start_date=start_date,
         end_date=end_date,
         bucket=bucket,
+        timezone_name=timezone,
     )
     return _ok_response(result)
 
@@ -106,7 +120,7 @@ async def audit_logs(
     request_id: Optional[str] = Query(None),
     status: Optional[list[str]] = Query(None),
     api_type: Optional[list[str]] = Query(None),
-    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Return filtered request audit logs."""
     service = _runtime_service(request)

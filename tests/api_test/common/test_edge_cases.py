@@ -60,7 +60,7 @@ class TestResourceEdgeCases:
                 f.write("scope test")
 
             resp = api_client.add_resource(
-                path=test_file, to="viking://agent/skills/invalid", wait=False
+                path=test_file, to="viking://user/skills/invalid", wait=False
             )
             assert resp.status_code == 400, (
                 f"adding resource to non-resources scope should return 400, got {resp.status_code}: {resp.text[:200]}"
@@ -124,6 +124,11 @@ class TestContentEdgeCases:
             assert write_resp.status_code == 200, (
                 f"write empty content with create mode should return 200, got {write_resp.status_code}: {write_resp.text[:200]}"
             )
+            assert write_resp.json().get("status") == "ok"
+
+            read_resp = api_client.fs_read(test_uri)
+            assert read_resp.status_code == 200
+            assert read_resp.json().get("result") == ""
         finally:
             try:
                 api_client.fs_rm(test_uri.rsplit("/", 1)[0], recursive=True)
